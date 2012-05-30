@@ -1,6 +1,12 @@
 ## Process this file with automake to produce Makefile.in
 
+ACLOCAL_AMFLAGS = -I m4
+
 SUBDIRS = src doc tools
+
+LIBTOOL_DEPS = @LIBTOOL_DEPS@
+libtool: $(LIBTOOL_DEPS)
+	$(SHELL) ./config.status libtool
 
 EXTRA_DIST = PORTS BUGS COPYRIGHT.GPL CREDITS INSTALL.W32 INSTALL.WCE INSTALL.FIPS
 
@@ -29,5 +35,5 @@ sign: dist
 		../dist/$(distdir).tar.gz
 	gpg --yes --armor --detach-sign --force-v3-sigs \
 		../dist/$(distdir)-installer.exe
-	sha1sum $(distdir).tar.gz | tee ../dist/$(distdir).tar.gz.sha1
+	sha256sum $(distdir).tar.gz | tee ../dist/$(distdir).tar.gz.sha256
 

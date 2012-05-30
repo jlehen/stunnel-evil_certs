@@ -1,6 +1,6 @@
 /*
  *   stunnel       Universal SSL tunnel
- *   Copyright (C) 1998-2009 Michal Trojnara <Michal.Trojnara@mirt.net>
+ *   Copyright (C) 1998-2011 Michal Trojnara <Michal.Trojnara@mirt.net>
  *
  *   This program is free software; you can redistribute it and/or modify it
  *   under the terms of the GNU General Public License as published by the
@@ -53,6 +53,8 @@
 int getpeername(int s, struct sockaddr_in *name, int *len) {
     char *value;
 
+    (void)s; /* skip warning about unused parameter */
+    (void)len; /* skip warning about unused parameter */
     name->sin_family=AF_INET;
     if((value=getenv("REMOTE_HOST")))
         name->sin_addr.s_addr=inet_addr(value);
@@ -65,4 +67,4 @@ int getpeername(int s, struct sockaddr_in *name, int *len) {
     return 0;
 }
 
-/* End of env.c */
+/* end of env.c */

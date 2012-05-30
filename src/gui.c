@@ -1,6 +1,6 @@
 /*
  *   stunnel       Universal SSL tunnel
- *   Copyright (C) 1998-2009 Michal Trojnara <Michal.Trojnara@mirt.net>
+ *   Copyright (C) 1998-2011 Michal Trojnara <Michal.Trojnara@mirt.net>
  *
  *   This program is free software; you can redistribute it and/or modify it
  *   under the terms of the GNU General Public License as published by the
@@ -44,7 +44,7 @@
 #define UWM_SYSTRAY (WM_USER + 1) /* sent to us by the taskbar */
 #define LOG_LINES 250
 
-/* Prototypes */
+/* prototypes */
 static void parse_cmdline(LPSTR);
 #ifndef _WIN32_WCE
 static int set_cwd(void);
@@ -71,7 +71,7 @@ static void WINAPI service_main(DWORD, LPTSTR *);
 static void WINAPI control_handler(DWORD);
 #endif /* !defined(_WIN32_WCE) */
 
-/* Global variables */
+/* global variables */
 static struct LIST {
   struct LIST *next;
   int len;
@@ -122,8 +122,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     LPSTR command_line;
 
-    /* system("c:\\start.bat"); */
-
 #ifdef _WIN32_WCE
     command_line=tstr2str(lpCmdLine);
 #else
@@ -138,13 +136,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         return 1;
 #endif
 
-    /* setup the windo caption before reading the configuration file
-     * options.win32_service is not available here and may not be used */
+    /* setup the initial window caption before reading the configuration file
+     * global_options.win32_service may not be used here */
 #ifdef _WIN32_WCE
-    _tcscpy(win32_name, TEXT("stunnel ") TEXT(VERSION)
+    _tcscpy(win32_name, TEXT("stunnel ") TEXT(STUNNEL_VERSION)
         TEXT(" on Windows CE (not configured)"));
 #else
-    _tcscpy(win32_name, TEXT("stunnel ") TEXT(VERSION)
+    _tcscpy(win32_name, TEXT("stunnel ") TEXT(STUNNEL_VERSION)
         TEXT(" on Win32 (not configured)"));
 #endif
 
@@ -155,11 +153,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         main_initialize(
             cmdline.config_file[0] ? cmdline.config_file : NULL, NULL);
 #ifdef _WIN32_WCE
-        _tcscpy(win32_name, TEXT("stunnel ") TEXT(VERSION)
+        _tcscpy(win32_name, TEXT("stunnel ") TEXT(STUNNEL_VERSION)
             TEXT(" on Windows CE"));
 #else
+        /* update the information */
         _snprintf(win32_name, STRLEN, "stunnel %s on Win32 (%s)",
-            VERSION, options.win32_service); /* update the information */
+            STUNNEL_VERSION, global_options.win32_service);
         if(!cmdline.service) {
             if(cmdline.install)
                 return service_install(command_line);
@@ -171,6 +170,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 return service_stop();
         }
 #endif
+    } else {
     }
 
     /* CATCH */
@@ -256,7 +256,7 @@ static int initialize_winsock() {
             return 0; /* IPv6 detected -> OK */
         FreeLibrary(handle);
     }
-    handle=LoadLibrary("wship6.dll"); /* Experimental IPv6 for Windows 2000 */
+    handle=LoadLibrary("wship6.dll"); /* experimental IPv6 for Windows 2000 */
     if(handle) {
         s_getaddrinfo=(GETADDRINFO)GetProcAddress(handle, "getaddrinfo");
         s_freeaddrinfo=(FREEADDRINFO)GetProcAddress(handle, "freeaddrinfo");
@@ -282,6 +282,10 @@ static int win_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     MSG msg;
     LPTSTR classname=win32_name;
 
+    (void)hPrevInstance; /* skip warning about unused parameter */
+    (void)command_line; /* skip warning about unused parameter */
+    (void)nCmdShow; /* skip warning about unused parameter */
+
     /* register the class */
 #ifndef _WIN32_WCE
     wc.cbSize=sizeof wc;
@@ -305,7 +309,7 @@ static int win_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 #endif
 
     /* create main window */
-    if(options.option.taskbar) { /* save menu resources */
+    if(global_options.option.taskbar) { /* save menu resources */
         htraymenu=LoadMenu(ghInst, MAKEINTRESOURCE(IDM_TRAYMENU));
         hpopup=GetSubMenu(htraymenu, 0);
     }
@@ -324,10 +328,14 @@ static int win_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         EnableMenuItem(hmainmenu, IDM_SAVEAS, MF_GRAYED);
 #endif
 
-    if(error_mode) /* log window is hidden by default */
+    if(error_mode) { /* log window is hidden by default */
         set_visible(1);
-    else /* create the main thread */
-        _beginthread(ThreadFunc, 0, NULL);
+#ifndef _WIN32_WCE
+        EnableMenuItem(hmainmenu, IDM_RELOAD, MF_GRAYED);
+#endif  
+        EnableMenuItem(htraymenu, IDM_RELOAD, MF_GRAYED);
+    } else /* create the main thread */
+        _beginthread(ThreadFunc, DEFAULT_STACK_SIZE, NULL);
 
     while(GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
@@ -361,10 +369,18 @@ static void update_taskbar(void) { /* create the taskbar icon */
 }
 
 static void ThreadFunc(void *arg) {
-    if(!setjmp(jump_buf))
+    (void)arg; /* skip warning about unused parameter */
+
+    if(!setjmp(jump_buf)) {
         main_execute();
-    else
-        set_visible(1); /* could be unsafe to call it from another thread */
+    } else {
+        /* FIXME: could be unsafe to call it from another thread */
+        set_visible(1);
+#ifndef _WIN32_WCE
+        EnableMenuItem(hmainmenu, IDM_RELOAD, MF_GRAYED);
+#endif		
+        EnableMenuItem(htraymenu, IDM_RELOAD, MF_GRAYED);
+    }
     _endthread();
 }
 
@@ -380,7 +396,7 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 #endif
     switch(message) {
     case WM_CREATE:
-        if(options.option.taskbar) /* taskbar update enabled? */
+        if(global_options.option.taskbar) /* taskbar update enabled? */
             SetTimer(hwnd, 0x29a, 1000, NULL); /* 1-second timer */
 
 #ifdef _WIN32_WCE
@@ -469,15 +485,17 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         case IDM_SAVEAS:
             save_file(hwnd);
             break;
-        case IDM_SETUP:
-            MessageBox(hwnd, TEXT("Function not implemented"),
-                win32_name, MB_ICONERROR);
+        case IDM_RELOAD:
+            log_close();
+            parse_conf(NULL, CONF_RELOAD);
+            log_open();
+            bind_ports();
             break;
         }
         return TRUE;
 
     case UWM_SYSTRAY: /* a taskbar event */
-        switch (lParam) {
+        switch(lParam) {
 #ifdef _WIN32_WCE
         case WM_LBUTTONDOWN: /* no right mouse button on Windows CE */
             GetWindowRect(GetDesktopWindow(), &rect); /* no cursor position */
@@ -504,6 +522,8 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
 static LRESULT CALLBACK about_proc(HWND hDlg, UINT message,
         WPARAM wParam, LPARAM lParam) {
+    (void)lParam; /* skip warning about unused parameter */
+
     switch(message) {
         case WM_INITDIALOG:
             return TRUE;
@@ -526,9 +546,9 @@ static LRESULT CALLBACK pass_proc(HWND hDlg, UINT message,
     TCHAR sPassword[PEM_BUFSIZE];
     char* cPassword;
 
-    switch (message) {
+    switch(message) {
     case WM_INITDIALOG:
-        /* set the default push button to "Cancel." */
+        /* set the default push button to "Cancel" */
         SendMessage(hDlg, DM_SETDEFID, (WPARAM) IDCANCEL, (LPARAM) 0);
 
         keyFileName = str2tstr(ui_data->section->key);
@@ -580,6 +600,8 @@ static LRESULT CALLBACK pass_proc(HWND hDlg, UINT message,
 }
 
 int passwd_cb(char *buf, int size, int rwflag, void *userdata) {
+    (void)rwflag; /* skip warning about unused parameter */
+
     ui_data=userdata;
     if(!DialogBox(ghInst, TEXT("PassBox"), hwnd, (DLGPROC)pass_proc))
         return 0; /* error */
@@ -590,7 +612,11 @@ int passwd_cb(char *buf, int size, int rwflag, void *userdata) {
 
 #ifdef HAVE_OSSL_ENGINE_H
 int pin_cb(UI *ui, UI_STRING *uis) {
-    ui_data=UI_get_app_data(ui);
+    ui_data=UI_get0_user_data(ui); /* was: ui_data=UI_get_app_data(ui); */
+    if(!ui_data) {
+        s_log(LOG_ERR, "INTERNAL ERROR: user data data pointer");
+        return 0;
+    }
     if(!DialogBox(ghInst, TEXT("PassBox"), hwnd, (DLGPROC)pass_proc))
         return 0; /* error */
     UI_set_result(ui, uis, ui_data->pass);
@@ -644,7 +670,7 @@ static void save_file(HWND hwnd) {
     CloseHandle(hFile);
 }
 
-void win_log(LPSTR line) { /* Also used in log.c */
+void win_log(LPSTR line) { /* also used in log.c */
     struct LIST *curr;
     int len;
     static int log_len=0;
@@ -719,7 +745,9 @@ static void set_visible(int i) {
         ShowWindow(hwnd, SW_HIDE); /* hide window */
 }
 
-void exit_win32(int code) { /* used instead of exit() on Win32 */
+void exit_win32(int exit_code) { /* used instead of exit() on Win32 */
+    (void)exit_code; /* skip warning about unused parameter */
+
     win_log("");
     s_log(LOG_ERR, "Server is down");
     MessageBox(hwnd, TEXT("Stunnel server is down due to an error.\n")
@@ -747,12 +775,11 @@ static void error_box(const LPTSTR text) {
 #ifndef _WIN32_WCE
 
 static int service_initialize(void) {
-    SERVICE_TABLE_ENTRY serviceTable[]={
-        {options.win32_service, service_main},
-        {0, 0}
-    };
+    SERVICE_TABLE_ENTRY serviceTable[]={{0, 0}, {0, 0}};
 
-    options.option.taskbar=0; /* disable taskbar for security */
+    serviceTable[0].lpServiceName=global_options.win32_service;
+    serviceTable[0].lpServiceProc=service_main;
+    global_options.option.taskbar=0; /* disable taskbar for security */
     if(!StartServiceCtrlDispatcher(serviceTable)) {
         error_box(TEXT("StartServiceCtrlDispatcher"));
         return 1;
@@ -775,9 +802,13 @@ static int service_install(LPSTR command_line) {
     safeconcat(service_path, "\" -service ");
     safeconcat(service_path, command_line);
     service=CreateService(scm,
-        options.win32_service, options.win32_service, SERVICE_ALL_ACCESS,
+        global_options.win32_service,
+        global_options.win32_service,
+        SERVICE_ALL_ACCESS,
         SERVICE_WIN32_OWN_PROCESS | SERVICE_INTERACTIVE_PROCESS,
-        SERVICE_AUTO_START, SERVICE_ERROR_NORMAL, service_path,
+        SERVICE_AUTO_START,
+        SERVICE_ERROR_NORMAL,
+        service_path,
         NULL, NULL, NULL, NULL, NULL);
     if(!service) {
         error_box(TEXT("CreateService"));
@@ -801,7 +832,7 @@ static int service_uninstall(void) {
         error_box(TEXT("OpenSCManager"));
         return 1;
     }
-    service=OpenService(scm, options.win32_service,
+    service=OpenService(scm, global_options.win32_service,
         SERVICE_QUERY_STATUS | DELETE);
     if(!service) {
         if(!cmdline.quiet)
@@ -845,7 +876,7 @@ static int service_start(void) {
         error_box(TEXT("OpenSCManager"));
         return 1;
     }
-    service=OpenService(scm, options.win32_service,
+    service=OpenService(scm, global_options.win32_service,
         SERVICE_QUERY_STATUS | SERVICE_START);
     if(!service) {
         error_box(TEXT("OpenService"));
@@ -891,7 +922,7 @@ static int service_stop(void) {
         error_box(TEXT("OpenSCManager"));
         return 1;
     }
-    service=OpenService(scm, options.win32_service,
+    service=OpenService(scm, global_options.win32_service,
         SERVICE_QUERY_STATUS | SERVICE_STOP);
     if(!service) {
         if(!cmdline.quiet)
@@ -937,6 +968,9 @@ static int service_stop(void) {
 }
 
 static void WINAPI service_main(DWORD argc, LPTSTR* argv) {
+    (void)argc; /* skip warning about unused parameter */
+    (void)argv; /* skip warning about unused parameter */
+
     /* initialise service status */
     serviceStatus.dwServiceType=SERVICE_WIN32;
     serviceStatus.dwCurrentState=SERVICE_STOPPED;
@@ -947,7 +981,8 @@ static void WINAPI service_main(DWORD argc, LPTSTR* argv) {
     serviceStatus.dwWaitHint=0;
 
     serviceStatusHandle=
-        RegisterServiceCtrlHandler(options.win32_service, control_handler);
+        RegisterServiceCtrlHandler(global_options.win32_service,
+            control_handler);
 
     if(serviceStatusHandle) {
         /* service is starting */
@@ -975,7 +1010,7 @@ static void WINAPI service_main(DWORD argc, LPTSTR* argv) {
 }
 
 static void WINAPI control_handler(DWORD controlCode) {
-    switch (controlCode) {
+    switch(controlCode) {
     case SERVICE_CONTROL_INTERROGATE:
         break;
 
@@ -1004,4 +1039,4 @@ static void WINAPI control_handler(DWORD controlCode) {
 
 #endif /* !defined(_WIN32_WCE) */
 
-/* End of gui.c */
+/* end of gui.c */

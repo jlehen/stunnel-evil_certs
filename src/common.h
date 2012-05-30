@@ -1,6 +1,6 @@
 /*
  *   stunnel       Universal SSL tunnel
- *   Copyright (C) 1998-2009 Michal Trojnara <Michal.Trojnara@mirt.net>
+ *   Copyright (C) 1998-2011 Michal Trojnara <Michal.Trojnara@mirt.net>
  *
  *   This program is free software; you can redistribute it and/or modify it
  *   under the terms of the GNU General Public License as published by the
@@ -38,11 +38,10 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#ifndef VERSION
-#define VERSION "unknown"
-#endif
+#include "version.h"
 
-/**************************************** Common constants */
+
+/**************************************** common constants */
 
 #define LIBWRAP_CLIENTS 5
 
@@ -53,21 +52,21 @@
 /* I/O buffer size */
 #define BUFFSIZE 16384
 
-/* Length of strings (including the terminating '\0' character) */
-/* It can't be lower than 256 bytes or NTLM authentication will break */
+/* length of strings (including the terminating '\0' character) */
+/* it can't be lower than 256 bytes or NTLM authentication will break */
 #define STRLEN 256
 
 /* IP address and TCP port textual representation length */
 #define IPLEN 128
 
-/* How many bytes of random input to read from files for PRNG */
+/* how many bytes of random input to read from files for PRNG */
 /* OpenSSL likes at least 128 bits, so 64 bytes seems plenty. */
 #define RANDOM_BYTES 64
 
-/* For FormatGuard */
+/* for FormatGuard */
 /* #define __NO_FORMATGUARD_ */
 
-/**************************************** Platform */
+/**************************************** platform */
 
 #ifdef USE_WIN32
 #define USE_IPv6
@@ -88,13 +87,13 @@ typedef int socklen_t;
 #define __WINCRYPT_H__
 #endif
 
-/**************************************** Generic headers */
+/**************************************** generic headers */
 
 #ifdef __vms
 #include <starlet.h>
 #endif /* __vms */
 
-/* For nsr-tandem-nsk architecture */
+/* for nsr-tandem-nsk architecture */
 #ifdef __TANDEM
 #include <floss.h>
 #endif
@@ -117,11 +116,11 @@ typedef int socklen_t;
 #define USE_LIBWRAP
 #endif
 
-/* Must be included before sys/stat.h for Ultrix */
+/* must be included before sys/stat.h for Ultrix */
 #include <sys/types.h>   /* u_short, u_long */
-/* General headers */
+/* general headers */
 #include <stdio.h>
-/* Must be included before sys/stat.h for Ultrix */
+/* must be included before sys/stat.h for Ultrix */
 #ifndef _WIN32_WCE
 #include <errno.h>
 #endif
@@ -173,13 +172,16 @@ typedef unsigned long u32;
 #define __USE_W32_SOCKETS
 
 /* Winsock2 header for IPv6 definitions */
-#ifdef _WIN32_WCE
-#include <winsock.h>
-#else
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#endif
 #include <windows.h>
+
+/* needed for winsock2 (not for winsock) */
+#define ENOTSOCK WSAENOTSOCK
+#define ENOPROTOOPT WSAENOPROTOOPT
+#define EINPROGRESS WSAEINPROGRESS
+#define EWOULDBLOCK WSAEWOULDBLOCK
+#define EADDRINUSE WSAEADDRINUSE
 
 #define ECONNRESET WSAECONNRESET
 #define ENOTSOCK WSAENOTSOCK
@@ -196,9 +198,6 @@ typedef unsigned long u32;
 
 #include <process.h>     /* _beginthread */
 #include <tchar.h>
-
-#define NO_IDEA
-#define OPENSSL_NO_IDEA
 
 /**************************************** non-WIN32 headers */
 
@@ -221,12 +220,17 @@ typedef unsigned long u32;
 #endif
 
 #ifdef __INNOTEK_LIBC__
-# define get_last_socket_error() sock_errno()
-# define get_last_error()        errno
-# define readsocket(s,b,n)       recv((s),(b),(n),0)
-# define writesocket(s,b,n)      send((s),(b),(n),0)
-# define closesocket(s)          close(s)
-# define ioctlsocket(a,b,c)      so_ioctl((a),(b),(c))
+#define socklen_t               __socklen_t
+#define strcasecmp              stricmp
+#define strncasecmp             strnicmp
+#define NI_NUMERICHOST          1
+#define NI_NUMERICSERV          2
+#define get_last_socket_error() sock_errno()
+#define get_last_error()        errno
+#define readsocket(s,b,n)       recv((s),(b),(n),0)
+#define writesocket(s,b,n)      send((s),(b),(n),0)
+#define closesocket(s)          close(s)
+#define ioctlsocket(a,b,c)      so_ioctl((a),(b),(c))
 #else
 #define get_last_socket_error() errno
 #define get_last_error()        errno
@@ -235,6 +239,7 @@ typedef unsigned long u32;
 #define closesocket(s)          close(s)
 #define ioctlsocket(a,b,c)      ioctl((a),(b),(c))
 #endif
+
     /* OpenVMS compatibility */
 #ifdef __vms
 #define libdir "__NA__"
@@ -266,7 +271,7 @@ typedef unsigned long u32;
 #include <sys/select.h>  /* for aix */
 #endif
 
-#ifndef BROKEN_POLL
+#if defined(HAVE_POLL) && !defined(BROKEN_POLL)
 #ifdef HAVE_POLL_H
 #include <poll.h>
 #define USE_POLL
@@ -276,7 +281,7 @@ typedef unsigned long u32;
 #define USE_POLL
 #endif /* HAVE_SYS_POLL_H */
 #endif /* HAVE_POLL_H */
-#endif /* BROKEN_POLL */
+#endif /* HAVE_POLL && !BROKEN_POLL */
 
 #ifdef HAVE_SYS_FILIO_H
 #include <sys/filio.h>   /* for FIONBIO */
@@ -305,11 +310,11 @@ typedef unsigned long u32;
 #endif
 
 #if defined(HAVE_WAITPID)
-/* For SYSV systems */
+/* for SYSV systems */
 #define wait_for_pid(a, b, c) waitpid((a), (b), (c))
 #define HAVE_WAIT_FOR_PID 1
 #elif defined(HAVE_WAIT4)
-/* For BSD systems */
+/* for BSD systems */
 #define wait_for_pid(a, b, c) wait4((a), (b), (c), NULL)
 #define HAVE_WAIT_FOR_PID 1
 #endif
@@ -334,6 +339,10 @@ extern char *sys_errlist[];
 /* old kernel headers without IP_TRANSPARENT definition */
 #define IP_TRANSPARENT 19
 #endif /* IP_TRANSPARENT */
+#ifdef HAVE_LINUX_NETFILTER_IPV4_H
+#include <limits.h>
+#include <linux/netfilter_ipv4.h>
+#endif /* HAVE_LINUX_NETFILTER_IPV4_H */
 #endif /* __linux__ */
 
 #endif /* USE_WIN32 */
@@ -353,16 +362,20 @@ extern char *sys_errlist[];
 #include <openssl/err.h>
 #include <openssl/crypto.h> /* for CRYPTO_* and SSLeay_version */
 #include <openssl/rand.h>
+#ifndef OPENSSL_NO_MD4
 #include <openssl/md4.h>
+#endif
 #include <openssl/des.h>
 
 #ifdef HAVE_OSSL_ENGINE_H
+#ifndef OPENSSL_NO_ENGINE
 #include <openssl/engine.h>
+#else
+#undef HAVE_OSSL_ENGINE_H
+#endif
 #endif /* HAVE_OSSL_ENGINE_H */
 
-#if SSLEAY_VERSION_NUMBER >= 0x00907000L
 #include <openssl/ocsp.h>
-#endif /* OpenSSL-0.9.7 */
 
 #ifdef USE_FIPS
 #include <openssl/fips.h>
@@ -380,9 +393,9 @@ extern char *sys_errlist[];
 
 #endif /* HAVE_OPENSSL */
 
-/**************************************** Other defines */
+/**************************************** other defines */
 
-/* Safe copy for strings declarated as char[STRLEN] */
+/* safe copy for strings declarated as char[STRLEN] */
 #define safecopy(dst, src) \
     (dst[STRLEN-1]='\0', strncpy((dst), (src), STRLEN-1))
 #define safeconcat(dst, src) \
@@ -396,7 +409,7 @@ extern char *sys_errlist[];
     do {unsigned char *p; for(p=(s); *p; p++) \
         if(!isalnum((int)*p)) *p='.';} while(0)
 
-/* Some definitions for IPv6 support */
+/* some definitions for IPv6 support */
 #if defined(USE_IPv6)
 #define addr_len(x) ((x).sa.sa_family==AF_INET ? \
     sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))
@@ -404,7 +417,7 @@ extern char *sys_errlist[];
 #define addr_len(x) (sizeof(struct sockaddr_in))
 #endif
 
-/* Always use IPv4 defaults! */
+/* always use IPv4 defaults! */
 #define DEFAULT_LOOPBACK "127.0.0.1"
 #define DEFAULT_ANY "0.0.0.0"
 #if 0
@@ -422,8 +435,7 @@ extern char *sys_errlist[];
 #define LOG_INFO        6
 #define LOG_DEBUG       7
 #endif /* defined (USE_WIN32) || defined (__vms) */
-#define LOG_RAW         -1
 
 #endif /* defined COMMON_H */
 
-/* End of common.h */
+/* end of common.h */

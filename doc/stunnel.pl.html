@@ -29,18 +29,19 @@
 	</ul>
 
 	<li><a href="#zwracana_warto__">ZWRACANA WARTO¦Æ</a></li>
+	<li><a href="#signa_y">SIGNA£Y</a></li>
 	<li><a href="#przyk_ady">PRZYK£ADY</a></li>
-	<li><a href="#pliki">PLIKI</a></li>
-	<li><a href="#b__dy">B£ÊDY</a></li>
-	<li><a href="#ograniczenia">OGRANICZENIA</a></li>
 	<li><a href="#notki">NOTKI</a></li>
 	<ul>
 
+		<li><a href="#ograniczenia">OGRANICZENIA</a></li>
 		<li><a href="#tryb_inetd__tylko_unix_">TRYB INETD (tylko Unix)</a></li>
 		<li><a href="#certyfikaty">CERTYFIKATY</a></li>
 		<li><a href="#losowo__">LOSOWO¦Æ</a></li>
 	</ul>
 
+	<li><a href="#pliki">PLIKI</a></li>
+	<li><a href="#b__dy">B£ÊDY</a></li>
 	<li><a href="#zobacz_r_wnie_">ZOBACZ RÓWNIE¯</a></li>
 	<li><a href="#autor">AUTOR</a></li>
 </ul>
@@ -148,17 +149,17 @@ odinstalowaniu</p>
 <h1><a name="plik_konfiguracyjny">PLIK KONFIGURACYJNY</a></h1>
 <p>Linia w pliku konfiguracyjnym mo¿e byæ:</p>
 <ul>
-<li>
-<p>pusta (ignorowana)</p>
+<li><strong><a name="pusta" class="item">pusta (ignorowana)</a></strong>
+
 </li>
-<li>
-<p>komentarzem rozpoczynaj±cym siê znakiem ';' (ignorowana)</p>
+<li><strong><a name="komentarzem_rozpoczynaj_cym_si_znakiem_ignorowana" class="item">komentarzem rozpoczynaj±cym siê znakiem ';' (ignorowana)</a></strong>
+
 </li>
-<li>
-<p>par± 'nazwa_opcji = warto¶æ_opcji'</p>
+<li><strong><a name="par_nazwa_opcji_warto_opcji" class="item">par± 'nazwa_opcji = warto¶æ_opcji'</a></strong>
+
 </li>
-<li>
-<p>tekstem '[nazwa_us³ugi]' wskazuj±cym pocz±tek definicji us³ugi</p>
+<li><strong><a name="tekstem_nazwa_us_ugi_wskazuj_cym_pocz_tek_definicji_us_ugi" class="item">tekstem '[nazwa_us³ugi]' wskazuj±cym pocz±tek definicji us³ugi</a></strong>
+
 </li>
 </ul>
 <p>
@@ -174,10 +175,6 @@ odinstalowaniu</p>
 po³±czeñ.  ¦cie¿ki podane w opcjach <em>CApath</em>, <em>CRLpath</em>, <em>pid</em>
 oraz <em>exec</em> musz± byæ umieszczone wewn±trz katalogu podanego w opcji
 <em>chroot</em> i okre¶lone wzglêdem tego katalogu.</p>
-<p>W przypadku wykorzystania kontroli dostêpu przy pomocy biblioteki
-libwrap (TCP wrappers) jej pliki konfiguracyjne (/etc/hosts.allow i
-/etc/hosts.deny) musz± zostaæ skopiowane do podkatalogu etc/
-umieszczonego wewn±trz katalogu podanego w opcji <em>chroot</em>.</p>
 </dd>
 <dt><strong><a name="compression_zlib_rle" class="item"><strong>compression</strong> = zlib | rle</a></strong></dt>
 
@@ -215,7 +212,20 @@ OpenSSL.  Opcja jest dostêpna z bibliotek± OpenSSL 0.9.5a lub nowsz±.</p>
 <dd>
 <p>wybór sprzêtowego urz±dzenia kryptograficznego</p>
 <p>domy¶lnie: bez wykorzystania urz±dzeñ kryptograficznych</p>
-<p>Przyk³ad wykorzystania w sekcji 'PRZYK£ADY'.</p>
+<p>Przyk³adowa konfiguracja umo¿liwiaj±ca odczytanie klucza prywatnego z
+urz±dzenia zgodnego z OpenSC:</p>
+<pre>
+    engine=dynamic
+    engineCtrl=SO_PATH:/usr/lib/opensc/engine_pkcs11.so
+    engineCtrl=ID:pkcs11
+    engineCtrl=LIST_ADD:1
+    engineCtrl=LOAD
+    engineCtrl=MODULE_PATH:/usr/lib/pkcs11/opensc-pkcs11.so
+    engineCtrl=INIT</pre>
+<pre>
+    [service]
+    engineNum=1
+    key=id_45</pre>
 </dd>
 <dt><strong><a name="enginectrl_command_parameter" class="item"><strong>engineCtrl</strong> = &lt;command&gt;[:&lt;parameter&gt;]</a></strong></dt>
 
@@ -361,8 +371,9 @@ na wszystkich adresach IP lokalnych interfejsów.</p>
 <p>Opcja okre¶la katalog, w którym <strong>stunnel</strong> bêdzie szuka³ certyfikatów,
 je¿eli u¿yta zosta³a opcja <em>verify</em>.  Pliki z certyfikatami musz±
 posiadaæ specjalne nazwy XXXXXXXX.0, gdzie XXXXXXXX jest skrótem
-kryptograficznym reprezentacji DER nazwy podmiotu certyfikatu
-(4 pierwsze bajty skrótu MD5 pocz±wszy od najmniej znaczacego).</p>
+kryptograficznym reprezentacji DER nazwy podmiotu certyfikatu.</p>
+<p>Funkcja skrótu zosta³a zmieniona w wersji 1.0.0 biblioteki OpenSSL.
+Nale¿y wykonaæ c_rehash przy zmianie OpenSSL 0.x.x na 1.x.x.</p>
 <p>Je¿eli zdefiniowano katalog <em>chroot</em>, to ¶cie¿ka do <em>CApath</em> jest okre¶lona
 wzglêdem tego katalogu.</p>
 </dd>
@@ -411,8 +422,10 @@ ruchu pomiêdzy wiele serwerów.</p>
 <p>katalog List Odwo³anych Certyfikatów (CRL)</p>
 <p>Opcja okre¶la katalog, w którym <strong>stunnel</strong> bêdzie szuka³ list CRL,
 je¿eli u¿yta zosta³a opcja <em>verify</em>.  Pliki z listami CRL musz±
-posiadaæ specjalne nazwy XXXXXXXX.0, gdzie XXXXXXXX jest skrótem
+posiadaæ specjalne nazwy XXXXXXXX.r0, gdzie XXXXXXXX jest skrótem
 listy CRL.</p>
+<p>Funkcja skrótu zosta³a zmieniona w wersji 1.0.0 biblioteki OpenSSL.
+Nale¿y wykonaæ c_rehash przy zmianie OpenSSL 0.x.x na 1.x.x.</p>
 <p>Je¿eli zdefiniowano katalog <em>chroot</em>, to ¶cie¿ka do <em>CRLpath</em> jest okre¶lona
 wzglêdem tego katalogu.</p>
 </dd>
@@ -423,10 +436,18 @@ wzglêdem tego katalogu.</p>
 <p>Opcja pozwala okre¶liæ po³o¿enie pliku zawieraj±cego listy CRL u¿ywane
 przez opcjê <em>verify</em>.</p>
 </dd>
+<dt><strong><a name="curve_nid" class="item"><strong>curve</strong> = nid</a></strong></dt>
+
+<dd>
+<p>krzywa dla ECDH</p>
+<p>domy¶lnie: sect163r2</p>
+</dd>
 <dt><strong><a name="delay_yes_no" class="item"><strong>delay</strong> = yes | no</a></strong></dt>
 
 <dd>
 <p>opó¼nij rozwiniêcie adresu DNS podanego w opcji <em>connect</em></p>
+<p>Opcja jest przydatna przy dynamicznym DNS, albo gdy us³uga DNS nie jest
+dostêpna przy starcie programu stunnel (klient VPN, po³±czenie wdzwaniane).</p>
 </dd>
 <dt><strong><a name="enginenum_numer_urz_dzenia" class="item"><strong>engineNum</strong> = &lt;numer urz±dzenia&gt;</a></strong></dt>
 
@@ -434,14 +455,14 @@ przez opcjê <em>verify</em>.</p>
 <p>wybierz urz±dzenie do odczyta klucza prywatnego</p>
 <p>Urz±dzenia s± numerowane od 1 w górê.</p>
 </dd>
-<dt><strong><a name="ka_do_programu" class="item"><strong>exec</strong> = ¶cie¿ka_do_programu (tylko Unix)</a></strong></dt>
+<dt><strong><a name="exec_cie_ka_do_programu" class="item"><strong>exec</strong> = ¶cie¿ka_do_programu</a></strong></dt>
 
 <dd>
 <p>wykonaj lokalny program przystosowany do pracy z superdemonem inetd</p>
 <p>Je¿eli zdefiniowano katalog <em>chroot</em>, to ¶cie¿ka do <em>exec</em> jest okre¶lona
 wzglêdem tego katalogu.</p>
 </dd>
-<dt><strong><a name="execargs_0_1_2_tylko_unix" class="item"><strong>execargs</strong> = $0 $1 $2 ... (tylko Unix)</a></strong></dt>
+<dt><strong><a name="execargs_0_1_2" class="item"><strong>execargs</strong> = $0 $1 $2 ...</a></strong></dt>
 
 <dd>
 <p>argumenty do opcji <em>exec</em> w³±cznie z nazw± programu ($0)</p>
@@ -473,6 +494,12 @@ komend±:</p>
 <pre>
     chmod 600 keyfile</pre>
 <p>domy¶lnie: warto¶æ opcji <em>cert</em></p>
+</dd>
+<dt><strong><a name="libwrap_yes_no" class="item"><strong>libwrap</strong> = yes | no</a></strong></dt>
+
+<dd>
+<p>w³±cz lub wy³±cz korzystanie z /etc/hosts.allow i /etc/hosts.deny.</p>
+<p>domy¶lnie: yes</p>
 </dd>
 <dt><strong><a name="local_serwer" class="item"><strong>local</strong> = serwer</a></strong></dt>
 
@@ -510,6 +537,7 @@ w programie Eudora mo¿na u¿yæ opcji:</p>
 
 <dd>
 <p>negocjuj SSL podanym protoko³em aplikacyjnym</p>
+<p>Protokó³ &quot;connect&quot; pozwala na tworzenie po³±czeñ klienta SSL przez proxy HTTP.</p>
 <p>aktualnie wspierane protoko³y: cifs, connect, imap, nntp, pop3, smtp, pgsql</p>
 </dd>
 <dt><strong><a name="protocolauthentication_uwierzytelnienie" class="item"><strong>protocolAuthentication</strong> = uwierzytelnienie</a></strong></dt>
@@ -587,21 +615,28 @@ w programie Eudora mo¿na u¿yæ opcji:</p>
 <dd>
 <p>maksymalny czas utrzymywania bezczynnego po³±czenia</p>
 </dd>
-<dt><strong><strong>transparent</strong> = yes | no (tylko Unix)</strong></dt>
+<dt><strong><a name="both" class="item"><strong>transparent</strong> = none | source | destination | both (tylko Unix)</a></strong></dt>
 
 <dd>
-<p>tryb przezroczystego proxy</p>
+<p>tryb przezroczystego proxy na wspieranych platformach</p>
+<p>Wspierane opcje:</p>
+<dl>
+<dt><strong><a name="none" class="item"><strong>none</strong></a></strong></dt>
+
+<dd>
+<p>Zablokuj wsparcie dla przezroczystago proxy.  Jest to warto¶æ domy¶lna.</p>
+</dd>
+<dt><strong><a name="source" class="item"><strong>source</strong></a></strong></dt>
+
+<dd>
 <p>Przepisz adres, aby nawi±zywane po³±czenie wydawa³o siê pochodziæ
 bezpo¶rednio od klienta, a nie od programu <em>stunnel</em>.</p>
 <p>Opcja jest aktualnie obs³ugiwana w:</p>
-<pre>
-    trybie zdalnym (opcja I&lt;connect&gt; na j±drze Linux &gt;=2.6.28
-    trybie zdalnym (opcja I&lt;connect&gt; na j±drze Linux 2.2.x
-    trybie lokalnym (opcja I&lt;exec&gt;)</pre>
-<p><strong>Tryb zdalny</strong> (zarówno 2.2.x jak i &gt;=2.6.28) wymaga, aby stunnel by³ pracowa³
-z prawami u¿ytkownika root.  W szczególno¶ci opcja <strong>setuid</strong> nie pozwoli na
-pracê przezroczystego proxy.</p>
-<p><strong>Linux &gt;=2.6.28</strong> wymaga nastêpuj±cych ustawieñ iptables oraz routingu
+<dl>
+<dt><strong><a name="zdalnym" class="item">Trybie zdalnym (opcja <strong>connect</strong>) w systemie <strong>Linux &gt;=2.6.28</strong></a></strong></dt>
+
+<dd>
+<p>Konfiguracja wymaga nastêpuj±cych ustawieñ iptables oraz routingu
 (na przyk³ad w pliku /etc/rc.local lub analogicznym):</p>
 <pre>
     iptables -t mangle -N DIVERT
@@ -609,25 +644,85 @@ pracê przezroczystego proxy.</p>
     iptables -t mangle -A DIVERT -j MARK --set-mark 1
     iptables -t mangle -A DIVERT -j ACCEPT
     ip rule add fwmark 1 lookup 100
-    ip route add local 0.0.0.0/0 dev lo table 100</pre>
-<p><strong>Linux 2.2.x</strong> wymaga skompilowania j±dra z opcj± <em>transparent proxy</em>.
+    ip route add local 0.0.0.0/0 dev lo table 100
+    echo 0 &gt;/proc/sys/net/ipv4/conf/lo/rp_filter</pre>
+<p>Konfiguracja ta wymaga, aby <strong>stunnel</strong> by³ wykonywany jako root i bez opcji <strong>setuid</strong>.</p>
+</dd>
+<dt><strong>Trybie zdalnym (opcja <strong>connect</strong>) w systemie <strong>Linux 2.2.x</strong></strong></dt>
+
+<dd>
+<p>Konfiguracja ta wymaga skompilowania j±dra z opcj± <em>transparent proxy</em>.
 Docelowa us³uga musi byæ umieszczona na osobnej maszynie, do której routing
 kierowany jest poprzez serwer stunnela.</p>
-<p><strong>Tryb lokalny</strong> jest realizowany poprzez za³adowanie przy pomocy LD_PRELOAD
-biblioteki env.so.</p>
+<p>Dodatkowo <strong>stunnel</strong> powinien byæ wykonywany jako root i bez opcji <strong>setuid</strong>.</p>
+</dd>
+<dt><strong>Trybie zdalnym (opcja <strong>connect</strong>) w systemie <strong>FreeBSD &gt;=8.0</strong></strong></dt>
+
+<dd>
+<p>Konfiguracja ta wymaga skonfigurowania firewalla i routingu.
+<strong>stunnel</strong> musi byæ wykonywany jako root i bez opcji <strong>setuid</strong>.</p>
+</dd>
+<dt><strong><a name="lokalnym" class="item">Trybie lokalnym (opcja <strong>exec</strong>)</a></strong></dt>
+
+<dd>
+<p>Konfiguracja ta jest realizowana przy pomocy biblioteki <strong>libstunnel.so</strong>.
+Do za³adowania biblioteki wykorzystywana jest zmienna ¶rodowiskowa _RLD_LIST na
+platformie Tru64 lub LD_PRELOAD na innych platformach.</p>
+</dd>
+</dl>
+</dd>
+<dt><strong><a name="destination" class="item"><strong>destination</strong></a></strong></dt>
+
+<dd>
+<p>Oryginalny adres docelowy jest u¿ywany zamiast opcji <strong>connect</strong>.</p>
+<p>Przyk³adowana konfiguracja przezroczystego adresu docelowego:</p>
+<pre>
+    [transparent]
+    client=yes
+    accept=&lt;port_stunnela&gt;
+    transparent=destination</pre>
+<p>Konfiguracja wymaga nastêpuj±cych ustawieñ iptables
+(na przyk³ad w pliku /etc/rc.local lub analogicznym):</p>
+<pre>
+    /sbin/iptables -I INPUT -i eth0 -p tcp --dport &lt;port_stunnela&gt; -j ACCEPT
+    /sbin/iptables -t nat -I PREROUTING -i eth0 -p tcp --dport &lt;port_przekierowany&gt; -j DNAT --to-destination &lt;lokalne_ip&gt;:&lt;port_stunnela&gt;</pre>
+<p>Przezroczysty adres docelowy jest aktualnie wspierany wy³±cznie w systemie Linux.</p>
+</dd>
+<dt><strong><strong>both</strong></strong></dt>
+
+<dd>
+<p>U¿yj przezroczystego proxy zarówno dla adresu ¼ród³owego jak i docelowego.</p>
+</dd>
+</dl>
+<p>Dla zapewnienia kompatybilno¶ci z wcze¶niejszymim wersjami wspierane s± dwie
+dodatkowe opcje:</p>
+<dl>
+<dt><strong><a name="yes" class="item"><strong>yes</strong></a></strong></dt>
+
+<dd>
+<p>Opcja zosta³a przemianowana na <strong>source</strong>.</p>
+</dd>
+<dt><strong><strong>no</strong></strong></dt>
+
+<dd>
+<p>Opcja zosta³a przemianowana na <strong>none</strong>.</p>
+</dd>
+</dl>
 </dd>
 <dt><strong><a name="verify_poziom" class="item"><strong>verify</strong> = poziom</a></strong></dt>
 
 <dd>
 <p>weryfikuj certyfikat drugiej strony po³±czenia</p>
-<pre>
-    poziom 1 - weryfikuj, je¿eli zosta³
-        przedstawiony
-    poziom 2 - weryfikuj z zainstalowanym
-        certyfikatem Centrum Certyfikacji
-    poziom 3 - weryfikuj z lokalnie
-        zainstalowanym certyfikatem drugiej strony
-    domy¶lnie - nie weryfikuj</pre>
+<dl>
+<dt><strong><a name="poziom_1_weryfikuj_je_eli_zosta_przedstawiony" class="item"><strong>poziom 1</strong> - weryfikuj, je¿eli zosta³ przedstawiony</a></strong></dt>
+
+<dt><strong><a name="poziom_2_weryfikuj_z_zainstalowanym_certyfikatem_centrum_certyfikacji" class="item"><strong>poziom 2</strong> - weryfikuj z zainstalowanym certyfikatem Centrum Certyfikacji</a></strong></dt>
+
+<dt><strong><a name="poziom_3_weryfikuj_z_lokalnie_zainstalowanym_certyfikatem_drugiej_strony" class="item"><strong>poziom 3</strong> - weryfikuj z lokalnie zainstalowanym certyfikatem drugiej strony</a></strong></dt>
+
+<dt><strong><a name="domy_lnie_nie_weryfikuj" class="item"><strong>domy¶lnie</strong> - nie weryfikuj</a></strong></dt>
+
+</dl>
 </dd>
 </dl>
 <p>
@@ -636,6 +731,56 @@ biblioteki env.so.</p>
 <h1><a name="zwracana_warto__">ZWRACANA WARTO¦Æ</a></h1>
 <p><strong>stunnel</strong> zwraca zero w przypadku sukcesu, lub warto¶æ niezerow±
 w przypadku b³êdu.</p>
+<p>
+</p>
+<hr />
+<h1><a name="signa_y">SIGNA£Y</a></h1>
+<p>Nastêpuj±ce sygna³y mog± byæ u¿yte do sterowania programem w systemie Unix:</p>
+<dl>
+<dt><strong><a name="sighup" class="item">SIGHUP</a></strong></dt>
+
+<dd>
+<p>Za³aduj ponownie plik konfiguracyjny.</p>
+<p>Niektóre globalne opcje nie bêd± prze³adowane:</p>
+<ul>
+<li><strong><a name="chroot" class="item">chroot</a></strong>
+
+</li>
+<li><strong><a name="fips" class="item">fips</a></strong>
+
+</li>
+<li><strong><a name="foreground" class="item">foreground</a></strong>
+
+</li>
+<li><strong><a name="pid" class="item">pid</a></strong>
+
+</li>
+<li><strong><a name="setgid" class="item">setgid</a></strong>
+
+</li>
+<li><strong><a name="setuid" class="item">setuid</a></strong>
+
+</li>
+</ul>
+<p>Je¿eli wykorzystywana jest opcja 'setuid' stunnel nie bêdzie móg³ za³adowaæ
+ponownie konfiguracji wykorzystuj±cej uprzywilejowane (&lt;1024) porty.</p>
+<p>Je¿eli wykorzystywana jest opcja 'chroot' stunnel bêdzie szuka³ wszystkich
+potrzebnych plików (³±cznie z plikiem konfiguracyjnym, certyfikatami, logiem i
+plikiem pid) wewn±trz katalogu wskazanego przez 'chroot'.</p>
+</dd>
+<dt><strong><a name="sigusr1" class="item">SIGUSR1</a></strong></dt>
+
+<dd>
+<p>Zamknij i otwórz ponownie log.
+Funkcja ta mo¿e zostaæ u¿yta w skrypcie rotuj±cym log programu stunnel.</p>
+</dd>
+<dt><strong><a name="sigterm_sigquit_sigint" class="item">SIGTERM, SIGQUIT, SIGINT</a></strong></dt>
+
+<dd>
+<p>Zakoñcz dzia³anie programu.</p>
+</dd>
+</dl>
+<p>Skutek wys³ania innych sygna³ów jest niezdefiniowany.</p>
 <p>
 </p>
 <hr />
@@ -666,54 +811,18 @@ konfiguracyjnym nie ma sekcji <em>[nazwa_us³ugi]</em>.</p>
 <pre>
     exec = /usr/sbin/imapd
     execargs = imapd</pre>
-<p>Przyk³adowa konfiguracja umo¿liwiaj±ca odczytanie klucza prywatnego z
-urz±dzenia zgodnego z OpenSC</p>
-<pre>
-    engine=dynamic
-    engineCtrl=SO_PATH:/usr/lib/opensc/engine_pkcs11.so
-    engineCtrl=ID:pkcs11
-    engineCtrl=LIST_ADD:1
-    engineCtrl=LOAD
-    engineCtrl=MODULE_PATH:/usr/lib/pkcs11/opensc-pkcs11.so
-    engineCtrl=INIT</pre>
-<pre>
-    [service]
-    engineNum=1
-    key=id_45</pre>
 <p>
 </p>
 <hr />
-<h1><a name="pliki">PLIKI</a></h1>
-<dl>
-<dt><strong><a name="stunnel_conf" class="item"><em class="file">stunnel.conf</em></a></strong></dt>
-
-<dd>
-<p>plik konfiguracyjny programu</p>
-</dd>
-<dt><strong><a name="stunnel_pem" class="item"><em class="file">stunnel.pem</em></a></strong></dt>
-
-<dd>
-<p>certyfikat i klucz prywatny</p>
-</dd>
-</dl>
+<h1><a name="notki">NOTKI</a></h1>
 <p>
 </p>
-<hr />
-<h1><a name="b__dy">B£ÊDY</a></h1>
-<p>Opcja <em>execargs</em> nie obs³uguje cytowania.</p>
-<p>
-</p>
-<hr />
-<h1><a name="ograniczenia">OGRANICZENIA</a></h1>
+<h2><a name="ograniczenia">OGRANICZENIA</a></h2>
 <p><em>stunnel</em> nie mo¿e byæ u¿ywany do szyfrowania protoko³u <em>FTP</em>,
 poniewa¿ do przesy³ania poszczególnych plików u¿ywa on dodatkowych
 po³±czeñ otwieranych na portach o dynamicznie przydzielanych numerach.
 Istniej± jednak specjalne wersje klientów i serwerów FTP pozwalaj±ce
 na szyfrowanie przesy³anych danych przy pomocy protoko³u <em>SSL</em>.</p>
-<p>
-</p>
-<hr />
-<h1><a name="notki">NOTKI</a></h1>
 <p>
 </p>
 <h2><a name="tryb_inetd__tylko_unix_">TRYB INETD (tylko Unix)</a></h2>
@@ -769,31 +878,32 @@ gdy¿ protokó³ SSL wymaga do bezpieczeñstwa kryptograficznego ¼ród³a
 dobrej losowo¶ci.  Nastêpuj±ce ¼ród³a s± kolejno odczytywane a¿ do
 uzyskania  wystarczaj±cej ilo¶ci entropii:</p>
 <ul>
-<li>
-<p>Zawarto¶æ pliku podanego w opcji <em>RNDfile</em>.</p>
+<li><strong><a name="zawarto_pliku_podanego_w_opcji_rndfile" class="item">Zawarto¶æ pliku podanego w opcji <em>RNDfile</em>.</a></strong>
+
 </li>
-<li>
-<p>Zawarto¶æ pliku o nazwie okre¶lonej przez zmienn± ¶rodowiskow±
-RANDFILE, o ile jest ona ustawiona.</p>
+<li><strong><a name="zawarto_pliku_o_nazwie_okre_lonej_przez_zmienn_rodowiskow_randfile_o_ile_jest_ona_ustawiona" class="item">Zawarto¶æ pliku o nazwie okre¶lonej przez zmienn± ¶rodowiskow±
+RANDFILE, o ile jest ona ustawiona.</a></strong>
+
 </li>
-<li>
-<p>Plik .rnd umieszczony w katalogu domowym u¿ytkownika,
-je¿eli zmienna RANDFILE nie jest ustawiona.</p>
+<li><strong><a name="plik_rnd_umieszczony_w_katalogu_domowym_u_ytkownika_je_eli_zmienna_randfile_nie_jest_ustawiona" class="item">Plik .rnd umieszczony w katalogu domowym u¿ytkownika,
+je¿eli zmienna RANDFILE nie jest ustawiona.</a></strong>
+
 </li>
-<li>
-<p>Plik podany w opcji '--with-random' w czasie konfiguracji programu.</p>
+<li><strong><a name="plik_podany_w_opcji_with_random_w_czasie_konfiguracji_programu" class="item">Plik podany w opcji '--with-random' w czasie konfiguracji programu.</a></strong>
+
 </li>
-<li>
-<p>Zawarto¶æ ekranu w systemie Windows.</p>
+<li><strong><a name="zawarto_ekranu_w_systemie_windows" class="item">Zawarto¶æ ekranu w systemie Windows.</a></strong>
+
 </li>
-<li>
-<p>Gniazdo egd, je¿eli u¿yta zosta³a opcja <em>EGD</em>.</p>
+<li><strong><a name="gniazdo_egd_je_eli_u_yta_zosta_a_opcja_egd" class="item">Gniazdo egd, je¿eli u¿yta zosta³a opcja <em>EGD</em>.</a></strong>
+
 </li>
-<li>
-<p>Gniazdo egd podane w opcji '--with-egd-socket' w czasie konfiguracji programu.</p>
+<li><strong><a name="gniazdo_egd_podane_w_opcji_with_egd_socket_w_czasie_konfiguracji_programu" class="item">Gniazdo egd podane w opcji '--with-egd-socket' w czasie konfiguracji
+programu.</a></strong>
+
 </li>
-<li>
-<p>Urz±dzenie /dev/urandom.</p>
+<li><strong><a name="urz_dzenie_dev_urandom" class="item">Urz±dzenie /dev/urandom.</a></strong>
+
 </li>
 </ul>
 <p>Wspó³czesne (&gt;=0.9.5a) wersje biblioteki <em>OpenSSL</em> automatycznie
@@ -820,6 +930,22 @@ powy¿szej listy.  Jest to w³a¶ciwo¶æ biblioteki <em>OpenSSL</em>, a nie programu
 <p>
 </p>
 <hr />
+<h1><a name="pliki">PLIKI</a></h1>
+<dl>
+<dt><strong><a name="stunnel_conf" class="item"><em class="file">stunnel.conf</em></a></strong></dt>
+
+<dd>
+<p>plik konfiguracyjny programu</p>
+</dd>
+</dl>
+<p>
+</p>
+<hr />
+<h1><a name="b__dy">B£ÊDY</a></h1>
+<p>Opcja <em>execargs</em> nie obs³uguje cytowania.</p>
+<p>
+</p>
+<hr />
 <h1><a name="zobacz_r_wnie_">ZOBACZ RÓWNIE¯</a></h1>
 <dl>
 <dt><strong><a name="tcpd" class="item"><a href="#tcpd">tcpd(8)</a></a></strong></dt>
@@ -832,15 +958,10 @@ powy¿szej listy.  Jest to w³a¶ciwo¶æ biblioteki <em>OpenSSL</em>, a nie programu
 <dd>
 <p>'super-serwer' internetowy</p>
 </dd>
-<dt><strong><a name="http_stunnel_mirt_net" class="item"><em class="file"><a href="http://stunnel.mirt.net/">http://stunnel.mirt.net/</a></em></a></strong></dt>
-
-<dd>
-<p>strona domowa programu <em>stunnel</em></p>
-</dd>
 <dt><strong><a name="http_www_stunnel_org" class="item"><em class="file"><a href="http://www.stunnel.org/">http://www.stunnel.org/</a></em></a></strong></dt>
 
 <dd>
-<p>najczê¶ciej zadawane pytania na temat programu <em>stunnel</em></p>
+<p>strona domowa programu <em>stunnel</em></p>
 </dd>
 <dt><strong><a name="http_www_openssl_org" class="item"><em class="file"><a href="http://www.openssl.org/">http://www.openssl.org/</a></em></a></strong></dt>
 
