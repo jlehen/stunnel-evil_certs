@@ -378,6 +378,29 @@ select engine number to read private key
 
 The engines are numbered starting from 1.
 
+=item B<evilconnect> = [host:]port
+
+connect to a remote host:port when the client's certificate cannot
+be verified
+
+This is only meaningful in server mode when I<connect> and I<verify> are used.
+Otherwise it has the same properties as the I<connect> option.
+
+=item B<evilexec> = executable_path (Unix only)
+
+execute local inetd-type program when the client's certificate cannot
+be verified
+
+This is only meaningful in server mode when I<exec> and I<verify> are used.
+Otherwise it has the same properties as the I<exec> option.
+
+=item B<execargs> = $0 $1 $2 ... (Unix only)
+
+arguments for I<evilexec> including program name ($0)
+
+Quoting is currently not supported.
+Arguments are separated with arbitrary number of whitespaces.
+
 =item B<exec> = executable_path (Unix only)
 
 execute local inetd-type program 

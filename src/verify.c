@@ -153,6 +153,7 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *callback_ctx) {
     SSL *ssl;
     CLI *c;
     char subject_name[STRLEN];
+    int evil_cert_ok;
 
     X509_NAME_oneline(X509_get_subject_name(callback_ctx->current_cert),
         subject_name, STRLEN);
@@ -163,14 +164,15 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *callback_ctx) {
     ssl=X509_STORE_CTX_get_ex_data(callback_ctx,
         SSL_get_ex_data_X509_STORE_CTX_idx());
     c=SSL_get_ex_data(ssl, cli_index);
+    evil_cert_ok = c->opt->option.evilremote | c->opt->option.evilprogram;
 
     if(!cert_check(c, callback_ctx, subject_name, preverify_ok))
-        return 0; /* reject connection */
+        return evil_cert_ok; /* reject connection */
     if(!crl_check(c, callback_ctx, subject_name))
-        return 0; /* reject connection */
+        return evil_cert_ok; /* reject connection */
 #if SSLEAY_VERSION_NUMBER >= 0x00907000L
     if(c->opt->option.ocsp && !ocsp_check(c, callback_ctx, subject_name))
-        return 0; /* reject connection */
+        return evil_cert_ok; /* reject connection */
 #endif /* OpenSSL-0.9.7 */
 
     /* errnum=X509_STORE_CTX_get_error(ctx); */

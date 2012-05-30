@@ -206,9 +206,10 @@ typedef struct local_options {
         /* service-specific data for client.c */
     int fd;        /* file descriptor accepting connections for this service */
     char *execname, **execargs; /* program name and arguments for local mode */
-    SOCKADDR_LIST local_addr, remote_addr, source_addr;
+    char *evilexecname, **evilexecargs;
+    SOCKADDR_LIST local_addr, remote_addr, evilremote_addr, source_addr;
     char *username;
-    char *remote_address;
+    char *remote_address, *evilremote_address;
     int timeout_busy; /* maximum waiting for data time */
     int timeout_close; /* maximum close_notify time */
     int timeout_connect; /* maximum connect() time */
@@ -230,9 +231,11 @@ typedef struct local_options {
         unsigned int accept:1;
         unsigned int remote:1;
         unsigned int retry:1; /* loop remote+program */
+	unsigned int evilremote:1;
         unsigned int sessiond:1;
 #ifndef USE_WIN32
         unsigned int program:1;
+	unsigned int evilprogram:1;
         unsigned int pty:1;
         unsigned int transparent:1;
 #endif
@@ -326,6 +329,7 @@ typedef struct {
     unsigned long pid; /* PID of local process */
     int fd; /* Temporary file descriptor */
     jmp_buf err;
+    int evil_cert; /* Certificate couldn't be verified */
 
     char sock_buff[BUFFSIZE]; /* Socket read buffer */
     char ssl_buff[BUFFSIZE]; /* SSL read buffer */

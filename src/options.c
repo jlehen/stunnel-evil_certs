@@ -781,6 +781,75 @@ static char *service_options(CMD cmd, LOCAL_OPTIONS *section,
     }
 #endif
 
+    /* evilconnect */
+    switch(cmd) {
+    case CMD_INIT:
+        section->option.evilremote=0;
+        section->evilremote_address=NULL;
+        section->evilremote_addr.num=0;
+        break;
+    case CMD_EXEC:
+        if(strcasecmp(opt, "evilconnect"))
+            break;
+        section->option.evilremote=1;
+        section->evilremote_address=stralloc(arg);
+        if(!section->option.delayed_lookup &&
+                !name2addrlist(&section->evilremote_addr, arg,
+		DEFAULT_LOOPBACK)) {
+            s_log(LOG_RAW, "Cannot resolve '%s' - delaying DNS lookup", arg);
+            section->option.delayed_lookup=1;
+        }
+        return NULL; /* OK */
+    case CMD_DEFAULT:
+        break;
+    case CMD_HELP:
+        s_log(LOG_RAW, "%-15s = [host:]port connect remote host:port "
+	    "on evil client cert", "evilconnect");
+        break;
+    }
+
+    /* evilexec */
+#ifndef USE_WIN32
+    switch(cmd) {
+    case CMD_INIT:
+        section->option.evilprogram=0;
+        section->evilexecname=NULL;
+        break;
+    case CMD_EXEC:
+        if(strcasecmp(opt, "evilexec"))
+            break;
+        section->option.evilprogram=1;
+        section->evilexecname=stralloc(arg);
+        return NULL; /* OK */
+    case CMD_DEFAULT:
+        break;
+    case CMD_HELP:
+        s_log(LOG_RAW, "%-15s = file execute local inetd-type program "
+	    "on evil client cert", "evilexec");
+        break;
+    }
+#endif
+
+    /* evilexecargs */
+#ifndef USE_WIN32
+    switch(cmd) {
+    case CMD_INIT:
+        section->evilexecargs=NULL;
+        break;
+    case CMD_EXEC:
+        if(strcasecmp(opt, "evilexecargs"))
+            break;
+        section->evilexecargs=argalloc(arg);
+        return NULL; /* OK */
+    case CMD_DEFAULT:
+        break;
+    case CMD_HELP:
+        s_log(LOG_RAW, "%-15s = arguments for 'evilexec' (including $0)",
+            "evilexecargs");
+        break;
+    }
+#endif
+
     /* exec */
 #ifndef USE_WIN32
     switch(cmd) {
@@ -1566,6 +1635,18 @@ static void section_validate(char *filename, int line_number,
 #endif
         config_error(filename, line_number,
             "Each service section must define exactly two endpoints");
+    if((section->option.evilremote || section->option.evilprogram) &&
+	    section->option.client)
+	config_error(filename, line_number,
+	    "Evil cert actions have sense only in server mode");
+    if((section->option.evilremote || section->option.evilprogram) &&
+	    section->verify_level==SSL_VERIFY_NONE)
+	config_error(filename, line_number,
+	    "Evil cert actions are only meaningful when verify level > 0");
+    if((section->option.evilremote && !section->option.remote) ||
+	    (section->option.evilprogram && !section->option.program))
+	config_error(filename, line_number,
+	    "Evil cert actions can be only specified with their counterpart");
     return; /* All tests passed -- continue program execution */
 }
 

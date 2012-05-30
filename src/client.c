@@ -144,6 +144,7 @@ static void run_client(CLI *c) {
     c->fd=-1;
     c->ssl=NULL;
     c->sock_bytes=c->ssl_bytes=0;
+    c->evil_cert=0;
 
     error=setjmp(c->err);
     if(!error)
@@ -279,6 +280,7 @@ static void init_remote(CLI *c) {
 static void init_ssl(CLI *c) {
     int i, err;
     SSL_SESSION *old_session;
+    X509 *peer;
 
     if(!(c->ssl=SSL_new(c->opt->ctx))) {
         sslerror("SSL_new");
@@ -329,8 +331,26 @@ static void init_ssl(CLI *c) {
             i=SSL_accept(c->ssl);
         leave_critical_section(CRIT_SSL);
         err=SSL_get_error(c->ssl, i);
-        if(err==SSL_ERROR_NONE)
-            break; /* ok -> done */
+        if(err==SSL_ERROR_NONE) {
+	    if(c->opt->option.client)
+		break; /* ok -> done */
+	    if(!c->opt->option.evilremote && !c->opt->option.evilprogram)
+		break; /* ok -> done */
+	    peer=SSL_get_peer_certificate(c->ssl);
+	    if (!peer) {
+		if (c->opt->verify_level!=SSL_VERIFY_NONE) {
+		    s_log(LOG_ERR, "No cert, proceed to evil cert endpoint");
+		    c->evil_cert=1;
+		}
+		break;
+	    }
+	    if(SSL_get_verify_result(c->ssl)==X509_V_OK)
+		break;
+	    sslerror("SSL_accept");
+	    s_log(LOG_ERR, "Proceed to evil cert endpoint");
+	    c->evil_cert=1;
+	    break;
+	}
         if(err==SSL_ERROR_WANT_READ || err==SSL_ERROR_WANT_WRITE) {
             s_poll_init(&c->fds);
             s_poll_add(&c->fds, c->ssl_rfd->fd,
@@ -859,7 +879,10 @@ static int connect_local(CLI *c) { /* spawn local process */
         sigemptyset(&newmask);
         sigprocmask(SIG_SETMASK, &newmask, NULL);
 #endif
-        execvp(c->opt->execname, c->opt->execargs);
+	if (c->evil_cert)
+	    execvp(c->opt->evilexecname, c->opt->evilexecargs);
+	else
+	    execvp(c->opt->execname, c->opt->execargs);
         ioerror(c->opt->execname); /* execv failed */
         _exit(1);
     default:
@@ -935,13 +958,15 @@ static int connect_remote(CLI *c) { /* connect to remote host */
     if(c->opt->option.delayed_lookup) {
         resolved_list.num=0;
         if(!name2addrlist(&resolved_list,
-                c->opt->remote_address, DEFAULT_LOOPBACK)) {
+                c->evil_cert ? c->opt->evilremote_address :
+		c->opt->remote_address, DEFAULT_LOOPBACK)) {
             s_log(LOG_ERR, "No host resolved");
             longjmp(c->err, 1);
         }
         address_list=&resolved_list;
     } else /* use pre-resolved addresses */
-        address_list=&c->opt->remote_addr;
+        address_list=c->evil_cert ? &c->opt->evilremote_addr :
+		&c->opt->remote_addr;
 
     /* try to connect each host from the list */
     for(ind_try=0; ind_try<address_list->num; ind_try++) {
