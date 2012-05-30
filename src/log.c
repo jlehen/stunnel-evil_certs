@@ -1,6 +1,6 @@
 /*
  *   stunnel       Universal SSL tunnel
- *   Copyright (C) 1998-2009 Michal Trojnara <Michal.Trojnara@mirt.net>
+ *   Copyright (C) 1998-2011 Michal Trojnara <Michal.Trojnara@mirt.net>
  *
  *   This program is free software; you can redistribute it and/or modify it
  *   under the terms of the GNU General Public License as published by the
@@ -39,48 +39,60 @@
 #include "prototypes.h"
 
 static void log_raw(const int, const char *, const char *);
-static void get_timestamp(const int, char *);
+static void get_timestamp(int, char *);
 
 static DISK_FILE *outfile=NULL;
-static struct LIST {
+static struct LIST { /* single-linked list of log lines */
     struct LIST *next;
     int level;
     char stamp[STRLEN], text[STRLEN];
 } *head=NULL, *tail=NULL;
-static enum {INIT_NONE, INIT_ERROR, INIT_FULL} mode=INIT_NONE;
+static LOG_MODE mode=LOG_MODE_NONE;
 
-void log_open(void) {
-    if(options.output_file) /* 'output' option specified */
-        outfile=file_open(options.output_file, 1);
-#if !defined(USE_WIN32) && !defined (__vms)
-    if(options.option.syslog)
+#if !defined(USE_WIN32) && !defined(__vms)
+
+void syslog_open(void) {
+    if(global_options.option.syslog)
 #ifdef __ultrix__
         openlog("stunnel", 0);
 #else
-        openlog("stunnel", LOG_CONS | LOG_NDELAY, options.facility);
+        openlog("stunnel", LOG_CONS|LOG_NDELAY, global_options.facility);
 #endif /* __ultrix__ */
-#endif /* !defined (USE_WIN32) && !defined (__vms) */
-    if(options.output_file && !outfile)
-        s_log(LOG_ERR, "Unable to open output file: %s", options.output_file);
-    mode=INIT_FULL;
+}
+
+void syslog_close(void) { /* this function is not currently used */
+    if(global_options.option.syslog)
+        closelog();
+}
+
+#endif /* !defined(USE_WIN32) && !defined(__vms) */
+
+void log_open(void) {
+    if(global_options.output_file) { /* 'output' option specified */
+        outfile=file_open(global_options.output_file, 1);
+        if(!outfile)
+            s_log(LOG_ERR, "Unable to open output file: %s",
+                global_options.output_file);
+    }
+    log_flush(LOG_MODE_FULL);
 }
 
 void log_close(void) {
+    mode=LOG_MODE_NONE;
     if(outfile) {
         file_close(outfile);
-        return;
+        outfile=NULL;
     }
-#ifndef USE_WIN32
-    if(options.option.syslog)
-        closelog();
-#endif
 }
 
-void log_flush(void) {
+void log_flush(LOG_MODE new_mode) {
     struct LIST *tmp;
 
-    if(mode==INIT_NONE)
-        mode=INIT_ERROR;
+    /* prevent changing LOG_MODE_FULL to LOG_MODE_ERROR
+     * once stderr file descriptor is closed */
+    if(mode==LOG_MODE_NONE)
+        mode=new_mode;
+
     while(head) {
         log_raw(head->level, head->stamp, head->text);
         tmp=head;
@@ -103,66 +115,61 @@ void s_log(int level, const char *format, ...) {
 #endif
     va_end(arglist);
 
-    if(mode!=INIT_NONE) { /* ready log the text directly */
+    if(mode==LOG_MODE_NONE) { /* save the text to log it later */
+        tmp=malloc(sizeof(struct LIST));
+        if(!tmp) /* out of memory */
+            return;
+        tmp->next=NULL;
+        tmp->level=level;
+        get_timestamp(level, tmp->stamp);
+        safecopy(tmp->text, text);
+        if(tail)
+            tail->next=tmp;
+        else
+            head=tmp;
+        tail=tmp;
+    } else { /* ready log the text directly */
         get_timestamp(level, stamp);
         log_raw(level, stamp, text);
-        return;
     }
-
-    /* not initialized -> save the text to log it later */
-    tmp=malloc(sizeof(struct LIST));
-    if(!tmp) /* out of memory */
-        return;
-    tmp->next=NULL;
-    tmp->level=level;
-    get_timestamp(level, tmp->stamp);
-    safecopy(tmp->text, text);
-    if(tail)
-        tail->next=tmp;
-    else
-        head=tmp;
-    tail=tmp;
 }
 
-static void log_raw(const int level,
-        const char *stamp, const char *text) {
-    char stamped[STRLEN];
+static void log_raw(const int level, const char *stamp, const char *text) {
+    char line[STRLEN];
 
-    safecopy(stamped, stamp);
-    safeconcat(stamped, text);
-
-    if(mode==INIT_FULL && level<=options.debug_level) {
-            /* logging allowed by the configuration file */
-#if !defined (USE_WIN32) && !defined (__vms)
-        if(options.option.syslog && level!=LOG_RAW)
+    /* build the line and log it to syslog/file */
+    if(mode==LOG_MODE_FULL) { /* configured */
+        safecopy(line, stamp);
+        safeconcat(line, text);
+#if !defined(USE_WIN32) && !defined(__vms)
+        if(level<=global_options.debug_level && global_options.option.syslog)
             syslog(level, "LOG%d[%lu:%lu]: %s", level,
                 stunnel_process_id(), stunnel_thread_id(), text);
 #endif /* USE_WIN32, __vms */
-        if(outfile)
-            file_putline(outfile, stamped); /* send log to file */
-    }
+        if(level<=global_options.debug_level && outfile)
+            file_putline(outfile, line); /* send log to file */
+    } else /* LOG_MODE_ERROR */
+        safecopy(line, text); /* don't log the time stamp in error mode */
 
+    /* log the line to GUI/stderr */
 #ifdef USE_WIN32
-    if(mode==INIT_ERROR || level==LOG_RAW || level<=options.debug_level)
-        win_log(stamped); /* always log to the GUI window */
+    if(mode==LOG_MODE_ERROR || level<=global_options.debug_level)
+        win_log(line); /* always log to the GUI window */
 #else /* Unix */
-    if(mode==INIT_ERROR || level==LOG_RAW ||
-            (level<=options.debug_level && options.option.foreground))
-        fprintf(stderr, "%s\n", stamped); /* send log to stderr */
+    if(mode==LOG_MODE_ERROR || /* always log LOG_MODE_ERROR to stderr */
+            (level<=global_options.debug_level &&
+            global_options.option.foreground))
+        fprintf(stderr, "%s\n", line); /* send log to stderr */
 #endif
 }
 
-static void get_timestamp(const int level, char *txt) {
+static void get_timestamp(int level, char *txt) {
     time_t gmt;
     struct tm *timeptr;
 #if defined(HAVE_LOCALTIME_R) && defined(_REENTRANT)
     struct tm timestruct;
 #endif
 
-    if(level==LOG_RAW) { /* do not add timestamp for raw logs */
-        *txt='\0';
-        return;
-    }
     time(&gmt);
 #if defined(HAVE_LOCALTIME_R) && defined(_REENTRANT)
     timeptr=localtime_r(&gmt, &timestruct);
@@ -180,19 +187,19 @@ static void get_timestamp(const int level, char *txt) {
         level, stunnel_process_id(), stunnel_thread_id());
 }
 
-void ioerror(const char *txt) { /* input/output error handler */
+void ioerror(const char *txt) { /* input/output error */
     log_error(LOG_ERR, get_last_error(), txt);
 }
 
-void sockerror(const char *txt) { /* socket error handler */
+void sockerror(const char *txt) { /* socket error */
     log_error(LOG_ERR, get_last_socket_error(), txt);
 }
 
-void log_error(int level, int error, const char *txt) { /* generic error logger */
-    s_log(level, "%s: %s (%d)", txt, my_strerror(error), error);
+void log_error(int level, int error, const char *txt) { /* generic error */
+    s_log(level, "%s: %s (%d)", txt, s_strerror(error), error);
 }
 
-char *my_strerror(int errnum) {
+char *s_strerror(int errnum) {
     switch(errnum) {
 #ifdef USE_WIN32
     case 10004:
@@ -305,4 +312,4 @@ char *my_strerror(int errnum) {
     }
 }
 
-/* End of log.c */
+/* end of log.c */

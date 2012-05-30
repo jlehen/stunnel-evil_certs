@@ -89,21 +89,13 @@ Each line of the configuration file can be either:
 
 =over 4
 
-=item *
+=item * an empty line (ignored)
 
-an empty line (ignored)
+=item * a comment starting with ';' (ignored)
 
-=item *
+=item * an 'option_name = option_value' pair
 
-a comment starting with ';' (ignored)
-
-=item *
-
-an 'option_name = option_value' pair
-
-=item *
-
-'[service_name]' indicating a start of a service definition
+=item * '[service_name]' indicating a start of a service definition
 
 =back
 
@@ -118,10 +110,6 @@ directory to chroot B<stunnel> process
 B<chroot> keeps B<stunnel> in chrooted jail.  I<CApath>, I<CRLpath>, I<pid>
 and I<exec> are located inside the jail and the patches have to be relative
 to the directory specified with B<chroot>.
-
-To have libwrap (TCP Wrappers) control effective in a chrooted environment
-you also have to copy its configuration files (/etc/hosts.allow and
-/etc/hosts.deny) there.
 
 =item B<compression> = zlib | rle
 
@@ -162,7 +150,20 @@ select hardware engine
 
 default: software-only cryptography
 
-There's an example in 'EXAMPLES' section.
+Here is an example of advanced engine configuration to read private key from an
+OpenSC engine
+
+    engine=dynamic
+    engineCtrl=SO_PATH:/usr/lib/opensc/engine_pkcs11.so
+    engineCtrl=ID:pkcs11
+    engineCtrl=LIST_ADD:1
+    engineCtrl=LOAD
+    engineCtrl=MODULE_PATH:/usr/lib/pkcs11/opensc-pkcs11.so
+    engineCtrl=INIT
+
+    [service]
+    engineNum=1
+    key=id_45
 
 =item B<engineCtrl> = command[:parameter]
 
@@ -305,9 +306,12 @@ If no host specified, defaults to all IP addresses for the local host.
 Certificate Authority directory
 
 This is the directory in which B<stunnel> will look for certificates when using
-the I<verify>. Note that the certificates in this directory should be named
+the I<verify>.  Note that the certificates in this directory should be named
 XXXXXXXX.0 where XXXXXXXX is the hash value of the DER encoded subject of the
-cert (the first 4 bytes of the MD5 hash in least significant byte order).
+cert.
+
+The hash algorithm has been changed in OpenSSL 1.0.0.  It is required to
+c_rehash the directory on upgrade from OpenSSL 0.x.x to OpenSSL 1.x.x.
 
 I<CApath> path is relative to I<chroot> directory if specified.
 
@@ -358,7 +362,10 @@ Certificate Revocation Lists directory
 
 This is the directory in which B<stunnel> will look for CRLs when
 using the I<verify>. Note that the CRLs in this directory should
-be named XXXXXXXX.0 where XXXXXXXX is the hash value of the CRL.
+be named XXXXXXXX.r0 where XXXXXXXX is the hash value of the CRL.
+
+The hash algorithm has been changed in OpenSSL 1.0.0.  It is required to
+c_rehash the directory on upgrade from OpenSSL 0.x.x to OpenSSL 1.x.x.
 
 I<CRLpath> path is relative to I<chroot> directory if specified.
 
@@ -368,9 +375,18 @@ Certificate Revocation Lists file
 
 This file contains multiple CRLs, used with the I<verify>.
 
+=item B<curve> = nid
+
+specify ECDH curve name
+
+default: sect163r2
+
 =item B<delay> = yes | no
 
 delay DNS lookup for 'connect' option
+
+This option is useful for dynamic DNS, or when DNS is not available during
+stunnel startup (road warrior VPN, dial-up configurations).
 
 =item B<engineNum> = engine number
 
@@ -378,13 +394,13 @@ select engine number to read private key
 
 The engines are numbered starting from 1.
 
-=item B<exec> = executable_path (Unix only)
+=item B<exec> = executable_path
 
 execute local inetd-type program 
 
 I<exec> path is relative to I<chroot> directory if specified.
 
-=item B<execargs> = $0 $1 $2 ... (Unix only)
+=item B<execargs> = $0 $1 $2 ...
 
 arguments for I<exec> including program name ($0)
 
@@ -415,6 +431,12 @@ to its owner.  On Unix systems you can use the following command:
     chmod 600 keyfile
 
 default: value of I<cert> option
+
+=item B<libwrap> = yes | no
+
+Enable or disable the use of /etc/hosts.allow and /etc/hosts.deny.
+
+default: yes
 
 =item B<local> = host
 
@@ -450,6 +472,9 @@ the following option can be used:
 =item B<protocol> = proto
 
 application protocol to negotiate SSL
+
+Specifically "connect" protocol is used in client mode to establish SSL
+connections via HTTP proxy.
 
 currently supported: cifs, connect, imap, nntp, pop3, smtp, pgsql
 
@@ -519,23 +544,33 @@ time to wait to connect a remote host
 
 time to keep an idle connection
 
-=item B<transparent> = yes | no (Unix only)
+=item B<transparent> = none | source | destination | both (Unix only)
 
-transparent proxy mode
+enable transparent proxy support on selected platforms
+
+Supported options:
+
+=over 4
+
+=item B<none>
+
+Disable transparent proxy support.  This is the default.
+
+=item B<source>
 
 Re-write address to appear as if wrapped daemon is connecting
 from the SSL client machine instead of the machine running B<stunnel>.
 
 This option is currently available in:
 
-    remote mode (I<connect> option) on Linux >=2.6.28
-    remote mode (I<connect> option) 2.2.x
-    local mode (I<exec> option)
+=over 4
 
-B<Remote mode> (either 2.2.x and >=2.6.28) requires stunnel to be executed as
-root.  B<setuid> option will also break this functionality.
+=item Remote mode (B<connect> option) on B<Linux E<gt>=2.6.28>
 
-B<Linux E<gt>=2.6.28> requires the following setup for iptables and routing
+This configuration requires stunnel to be executed as root and without
+B<setuid> option.
+
+This configuration requires the following setup for iptables and routing
 (possibly in /etc/rc.local or equivalent file):
 
     iptables -t mangle -N DIVERT
@@ -544,21 +579,86 @@ B<Linux E<gt>=2.6.28> requires the following setup for iptables and routing
     iptables -t mangle -A DIVERT -j ACCEPT
     ip rule add fwmark 1 lookup 100
     ip route add local 0.0.0.0/0 dev lo table 100
+    echo 0 >/proc/sys/net/ipv4/conf/lo/rp_filter
 
-B<Linux 2.2.x> requires kernel to be compiled with I<transparent proxy> option.
+B<stunnel> must also to be executed as root and without B<setuid> option.
+
+=item Remote mode (B<connect> option) on B<Linux 2.2.x>
+
+This configuration requires kernel to be compiled with I<transparent proxy> option.
 Connected service must be installed on a separate host.
 Routing towards the clients has to go through the stunnel box.
 
-B<Local mode> works by LD_PRELOADing env.so shared library.
+B<stunnel> must also to be executed as root and without B<setuid> option.
+
+=item Remote mode (B<connect> option) on B<FreeBSD E<gt>=8.0>
+
+This configuration requires additional firewall and routing setup.
+B<stunnel> must also to be executed as root and without B<setuid> option.
+
+=item Local mode (B<exec> option)
+
+This configuration works by pre-loading B<libstunnel.so> shared library.
+_RLD_LIST environment variable is used on Tru64, and LD_PRELOAD variable on
+other platforms.
+
+=back
+
+=item B<destination>
+
+Original destination is used instead of B<connect> option.
+
+A service section for transparent destination may look like this:
+
+    [transparent]
+    client=yes
+    accept=<stunnel_port>
+    transparent=destination
+
+This configuration requires the following setup for iptables
+(possibly in /etc/rc.local or equivalent file):
+
+    /sbin/iptables -I INPUT -i eth0 -p tcp --dport <stunnel_port> -j ACCEPT
+    /sbin/iptables -t nat -I PREROUTING -i eth0 -p tcp --dport <redirected_port> -j DNAT --to-destination <local_ip>:<stunnel_port>
+
+Transparent destination option is currently only supported on Linux.
+
+=item B<both>
+
+Use both B<source> and B<destination> transparent proxy.
+
+=back
+
+Two legacy options are also supported for backward compatibility:
+
+=over 4
+
+=item B<yes>
+
+This options has been renamed to B<source>.
+
+=item B<no>
+
+This options has been renamed to B<none>.
+
+=back
+
 
 =item B<verify> = level
 
 verify peer certificate
 
-    level 1 - verify peer certificate if present
-    level 2 - verify peer certificate
-    level 3 - verify peer with locally installed certificate
-    default - no verify
+=over 4
+
+=item B<level 1> - verify peer certificate if present
+
+=item B<level 2> - verify peer certificate
+
+=item B<level 3> - verify peer with locally installed certificate
+
+=item B<default> - no verify
+
+=back
 
 It is important to understand, that this option was solely designed for access
 control and not for authorization.  Specifically for level 2 every non-revoked
@@ -572,6 +672,55 @@ for webservers.  Level 3 is preferred for point-to-point connections.
 =head1 RETURN VALUE
 
 B<stunnel> returns zero on success, non-zero on error.
+
+
+=head1 SIGNALS
+
+The following signals can be used to control stunnel in Unix environment:
+
+=over 4
+
+=item SIGHUP
+
+Force a reload of the configuration file.
+
+Some global options will not be reloaded:
+
+=over 4
+
+=item * chroot
+
+=item * fips
+
+=item * foreground
+
+=item * pid
+
+=item * setgid
+
+=item * setuid
+
+=back
+
+The use of 'setuid' option will also prevent stunnel from binding privileged
+(<1024) ports during configuration reloading.
+
+When 'chroot' option is used, stunnel will look for all its files (including
+configuration file, certificates, log file and pid file) within the chroot
+jail.
+
+=item SIGUSR1
+
+Close and reopen stunnel log file.
+This function can be used for log rotation.
+
+=item SIGTERM, SIGQUIT, SIGINT
+
+Shut stunnel down.
+
+=back
+
+The result of sending any other signals to the server is undefined.
 
 
 =head1 EXAMPLES
@@ -599,50 +748,15 @@ Note there must be no I<[service_name]> section.
     exec = /usr/sbin/imapd
     execargs = imapd
 
-Here is an example of advanced engine configuration to read private key from an
-OpenSC engine
 
-    engine=dynamic
-    engineCtrl=SO_PATH:/usr/lib/opensc/engine_pkcs11.so
-    engineCtrl=ID:pkcs11
-    engineCtrl=LIST_ADD:1
-    engineCtrl=LOAD
-    engineCtrl=MODULE_PATH:/usr/lib/pkcs11/opensc-pkcs11.so
-    engineCtrl=INIT
+=head1 NOTES
 
-    [service]
-    engineNum=1
-    key=id_45
-
-
-=head1 FILES
-
-=over 4
-
-=item F<stunnel.conf>
-
-B<stunnel> configuration file
-
-=item F<stunnel.pem>
-
-B<stunnel> certificate and private key
-
-=back
-
-
-=head1 BUGS
-
-Option I<execargs> does not support quoting.
-
-
-=head1 RESTRICTIONS
+=head2 RESTRICTIONS
 
 B<stunnel> cannot be used for the FTP daemon because of the nature
 of the FTP protocol which utilizes multiple ports for data transfers.
 There are available SSL enabled versions of FTP and telnet daemons, however.
 
-
-=head1 NOTES
 
 =head2 INETD MODE
 
@@ -698,37 +812,21 @@ in order until sufficient random data has been gathered:
 
 =over 4
 
-=item *
+=item * The file specified with the I<RNDfile> flag.
 
-The file specified with the I<RNDfile> flag.
+=item * The file specified by the RANDFILE environment variable, if set.
 
-=item *
+=item * The file .rnd in your home directory, if RANDFILE not set.
 
-The file specified by the RANDFILE environment variable, if set.
+=item * The file specified with '--with-random' at compile time.
 
-=item *
+=item * The contents of the screen if running on Windows.
 
-The file .rnd in your home directory, if RANDFILE not set.
+=item * The egd socket specified with the I<EGD> flag.
 
-=item *
+=item * The egd socket specified with '--with-egd-sock' at compile time.
 
-The file specified with '--with-random' at compile time.
-
-=item *
-
-The contents of the screen if running on Windows.
-
-=item *
-
-The egd socket specified with the I<EGD> flag.
-
-=item *
-
-The egd socket specified with '--with-egd-sock' at compile time.
-
-=item *
-
-The /dev/urandom device.
+=item * The /dev/urandom device.
 
 =back
 
@@ -738,7 +836,7 @@ With previous versions it will continue to gather from all the above
 sources since no SSL function exists to tell when enough data is available.
 
 Note that on Windows machines that do not have console user interaction
-(mouse movements, creating windows, etc) the screen contents are not
+(mouse movements, creating windows, etc.) the screen contents are not
 variable enough to be sufficient, and you should provide a random file
 for use with the I<RNDfile> flag.
 
@@ -756,6 +854,22 @@ at the very bottom of the list above.  This isn't B<stunnel's> behaviour, it's
 OpenSSLs.
 
 
+=head1 FILES
+
+=over 4
+
+=item F<stunnel.conf>
+
+B<stunnel> configuration file
+
+=back
+
+
+=head1 BUGS
+
+Option I<execargs> does not support quoting.
+
+
 =head1 SEE ALSO
 
 =over 4
@@ -768,13 +882,9 @@ access control facility for internet services
 
 internet 'super-server'
 
-=item F<http://stunnel.mirt.net/>
-
-B<stunnel> homepage
-
 =item F<http://www.stunnel.org/>
 
-B<stunnel> Frequently Asked Questions
+B<stunnel> homepage
 
 =item F<http://www.openssl.org/>
 

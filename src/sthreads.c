@@ -1,6 +1,6 @@
 /*
  *   stunnel       Universal SSL tunnel
- *   Copyright (C) 1998-2009 Michal Trojnara <Michal.Trojnara@mirt.net>
+ *   Copyright (C) 1998-2011 Michal Trojnara <Michal.Trojnara@mirt.net>
  *
  *   This program is free software; you can redistribute it and/or modify it
  *   under the terms of the GNU General Public License as published by the
@@ -87,65 +87,71 @@ unsigned long stunnel_thread_id(void) {
 }
 
 static CONTEXT *new_context(int stack_size) {
-    CONTEXT *ctx;
+    CONTEXT *context;
 
     /* allocate and fill the CONTEXT structure */
-    ctx=malloc(sizeof(CONTEXT));
-    if(!ctx) {
+    context=malloc(sizeof(CONTEXT));
+    if(!context) {
         s_log(LOG_ERR, "Unable to allocate CONTEXT structure");
         return NULL;
     }
-    ctx->stack=malloc(stack_size);
-    if(!ctx->stack) {
+    context->stack=malloc(stack_size);
+    if(!context->stack) {
         s_log(LOG_ERR, "Unable to allocate CONTEXT stack");
         return NULL;
     }
-    ctx->id=next_id++;
-    ctx->fds=NULL;
-    ctx->ready=0;
-    /* some manuals claim that initialization of ctx structure is required */
-    if(getcontext(&ctx->ctx)<0) {
-        free(ctx->stack);
-        free(ctx);
+    context->id=next_id++;
+    context->fds=NULL;
+    context->ready=0;
+    /* some manuals claim that initialization of context structure is required */
+    if(getcontext(&context->context)<0) {
+        free(context->stack);
+        free(context);
         ioerror("getcontext");
         return NULL;
     }
-    ctx->ctx.uc_link=NULL; /* it should never happen */
+    context->context.uc_link=NULL; /* it should never happen */
 #if defined(__sgi) || ARGC==2 /* obsolete ss_sp semantics */
-    ctx->ctx.uc_stack.ss_sp=ctx->stack+stack_size-8;
+    context->context.uc_stack.ss_sp=context->stack+stack_size-8;
 #else
-    ctx->ctx.uc_stack.ss_sp=ctx->stack;
+    context->context.uc_stack.ss_sp=context->stack;
 #endif
-    ctx->ctx.uc_stack.ss_size=stack_size;
-    ctx->ctx.uc_stack.ss_flags=0;
+    context->context.uc_stack.ss_size=stack_size;
+    context->context.uc_stack.ss_flags=0;
 
     /* attach to the tail of the ready queue */
-    ctx->next=NULL;
+    context->next=NULL;
     if(ready_tail)
-        ready_tail->next=ctx;
-    ready_tail=ctx;
+        ready_tail->next=context;
+    ready_tail=context;
     if(!ready_head)
-        ready_head=ctx;
-    return ctx;
+        ready_head=context;
+    return context;
 }
 
 void sthreads_init(void) {
     /* create the first (listening) context and put it in the running queue */
     if(!new_context(DEFAULT_STACK_SIZE)) {
-        s_log(LOG_RAW, "Unable create the listening context");
+        s_log(LOG_ERR, "Unable create the listening context");
         die(1);
     }
 }
 
 int create_client(int ls, int s, CLI *arg, void *(*cli)(void *)) {
-    CONTEXT *ctx;
+    CONTEXT *context;
 
+    (void)ls; /* this parameter is only used with USE_FORK */
     s_log(LOG_DEBUG, "Creating a new context");
-    ctx=new_context(arg->opt->stack_size);
-    if(!ctx)
+    context=new_context(arg->opt->stack_size);
+    if(!context) {
+        if(arg)
+            free(arg);
+        if(s>=0)
+            closesocket(s);
         return -1;
-    s_log(LOG_DEBUG, "Context %ld created", ctx->id);
-    makecontext(&ctx->ctx, (void(*)(void))cli, ARGC, arg);
+    }
+    s_log(LOG_DEBUG, "Context %ld created", context->id);
+    makecontext(&context->context, (void(*)(void))cli, ARGC, arg);
     return 0;
 }
 
@@ -209,9 +215,11 @@ void leave_critical_section(SECTION_CODE i) {
 
 static void locking_callback(int mode, int type,
 #ifdef HAVE_OPENSSL
-    const /* Callback definition has been changed in openssl 0.9.3 */
+    const /* callback definition has been changed in openssl 0.9.3 */
 #endif
     char *file, int line) {
+    (void)file; /* skip warning about unused parameter */
+    (void)line; /* skip warning about unused parameter */
     if(mode&CRYPTO_LOCK)
         pthread_mutex_lock(lock_cs+type);
     else
@@ -226,6 +234,8 @@ static struct CRYPTO_dynlock_value *dyn_create_function(const char *file,
         int line) {
     struct CRYPTO_dynlock_value *value;
 
+    (void)file; /* skip warning about unused parameter */
+    (void)line; /* skip warning about unused parameter */
     value=malloc(sizeof(struct CRYPTO_dynlock_value));
     if(!value)
         return NULL;
@@ -235,6 +245,8 @@ static struct CRYPTO_dynlock_value *dyn_create_function(const char *file,
 
 static void dyn_lock_function(int mode, struct CRYPTO_dynlock_value *value,
         const char *file, int line) {
+    (void)file; /* skip warning about unused parameter */
+    (void)line; /* skip warning about unused parameter */
     if(mode&CRYPTO_LOCK)
         pthread_mutex_lock(&value->mutex);
     else
@@ -243,6 +255,8 @@ static void dyn_lock_function(int mode, struct CRYPTO_dynlock_value *value,
 
 static void dyn_destroy_function(struct CRYPTO_dynlock_value *value,
         const char *file, int line) {
+    (void)file; /* skip warning about unused parameter */
+    (void)line; /* skip warning about unused parameter */
     pthread_mutex_destroy(&value->mutex);
     free(value);
 }
@@ -258,17 +272,17 @@ unsigned long stunnel_thread_id(void) {
 void sthreads_init(void) {
     int i;
 
-    /* Initialize stunnel critical sections */
+    /* initialize stunnel critical sections */
     for(i=0; i<CRIT_SECTIONS; i++)
         pthread_mutex_init(stunnel_cs+i, NULL);
 
-    /* Initialize OpenSSL locking callback */
+    /* initialize OpenSSL locking callback */
     for(i=0; i<CRYPTO_NUM_LOCKS; i++)
         pthread_mutex_init(lock_cs+i, NULL);
     CRYPTO_set_id_callback(stunnel_thread_id);
     CRYPTO_set_locking_callback(locking_callback);
 
-    /* Initialize OpenSSL dynamic locks callbacks */
+    /* initialize OpenSSL dynamic locks callbacks */
     CRYPTO_set_dynlock_create_callback(dyn_create_function);
     CRYPTO_set_dynlock_lock_callback(dyn_lock_function);
     CRYPTO_set_dynlock_destroy_callback(dyn_destroy_function);
@@ -280,13 +294,14 @@ int create_client(int ls, int s, CLI *arg, void *(*cli)(void *)) {
 #ifdef HAVE_PTHREAD_SIGMASK
     sigset_t newmask, oldmask;
 
-    /* Initialize attributes for creating new threads */
+    (void)ls; /* this parameter is only used with USE_FORK */
+    /* initialize attributes for creating new threads */
     pthread_attr_init(&pth_attr);
     pthread_attr_setdetachstate(&pth_attr, PTHREAD_CREATE_DETACHED);
     pthread_attr_setstacksize(&pth_attr, arg->opt->stack_size);
 
-    /* The idea is that only the main thread handles all the signals with
-     * posix threads.  Signals are blocked for any other thread. */
+    /* the idea is that only the main thread handles all the signals with
+     * posix threads;  signals are blocked for any other thread */
     sigemptyset(&newmask);
     sigaddset(&newmask, SIGCHLD);
     sigaddset(&newmask, SIGTERM);
@@ -299,6 +314,8 @@ int create_client(int ls, int s, CLI *arg, void *(*cli)(void *)) {
 #ifdef HAVE_PTHREAD_SIGMASK
         pthread_sigmask(SIG_SETMASK, &oldmask, NULL); /* restore the mask */
 #endif /* HAVE_PTHREAD_SIGMASK */
+        if(arg)
+            free(arg);
         if(s>=0)
             closesocket(s);
         return -1;
@@ -326,9 +343,11 @@ void leave_critical_section(SECTION_CODE i) {
 
 static void locking_callback(int mode, int type,
 #ifdef HAVE_OPENSSL
-    const /* Callback definition has been changed in openssl 0.9.3 */
+    const /* callback definition has been changed in openssl 0.9.3 */
 #endif
     char *file, int line) {
+    (void)file; /* skip warning about unused parameter */
+    (void)line; /* skip warning about unused parameter */
     if(mode&CRYPTO_LOCK)
         EnterCriticalSection(lock_cs+type);
     else
@@ -343,6 +362,8 @@ static struct CRYPTO_dynlock_value *dyn_create_function(const char *file,
         int line) {
     struct CRYPTO_dynlock_value *value;
 
+    (void)file; /* skip warning about unused parameter */
+    (void)line; /* skip warning about unused parameter */
     value=malloc(sizeof(struct CRYPTO_dynlock_value));
     if(!value)
         return NULL;
@@ -352,6 +373,8 @@ static struct CRYPTO_dynlock_value *dyn_create_function(const char *file,
 
 static void dyn_lock_function(int mode, struct CRYPTO_dynlock_value *value,
         const char *file, int line) {
+    (void)file; /* skip warning about unused parameter */
+    (void)line; /* skip warning about unused parameter */
     if(mode&CRYPTO_LOCK)
         EnterCriticalSection(&value->mutex);
     else
@@ -360,6 +383,8 @@ static void dyn_lock_function(int mode, struct CRYPTO_dynlock_value *value,
 
 static void dyn_destroy_function(struct CRYPTO_dynlock_value *value,
         const char *file, int line) {
+    (void)file; /* skip warning about unused parameter */
+    (void)line; /* skip warning about unused parameter */
     DeleteCriticalSection(&value->mutex);
     free(value);
 }
@@ -375,25 +400,30 @@ unsigned long stunnel_thread_id(void) {
 void sthreads_init(void) {
     int i;
 
-    /* Initialize stunnel critical sections */
+    /* initialize stunnel critical sections */
     for(i=0; i<CRIT_SECTIONS; i++)
         InitializeCriticalSection(stunnel_cs+i);
 
-    /* Initialize OpenSSL locking callback */
+    /* initialize OpenSSL locking callback */
     for(i=0; i<CRYPTO_NUM_LOCKS; i++)
         InitializeCriticalSection(lock_cs+i);
     CRYPTO_set_locking_callback(locking_callback);
 
-    /* Initialize OpenSSL dynamic locks callbacks */
+    /* initialize OpenSSL dynamic locks callbacks */
     CRYPTO_set_dynlock_create_callback(dyn_create_function);
     CRYPTO_set_dynlock_lock_callback(dyn_lock_function);
     CRYPTO_set_dynlock_destroy_callback(dyn_destroy_function);
 }
 
 int create_client(int ls, int s, CLI *arg, void *(*cli)(void *)) {
+    (void)ls; /* this parameter is only used with USE_FORK */
     s_log(LOG_DEBUG, "Creating a new thread");
-    if(_beginthread((void(*)(void *))cli, arg->opt->stack_size, arg)==-1) {
+    if((long)_beginthread((void(*)(void *))cli, arg->opt->stack_size, arg)==-1) {
         ioerror("_beginthread");
+        if(arg)
+            free(arg);
+        if(s>=0)
+            closesocket(s);
         return -1;
     }
     s_log(LOG_DEBUG, "New thread created");
@@ -428,9 +458,14 @@ unsigned long stunnel_thread_id(void) {
 }
 
 int create_client(int ls, int s, CLI *arg, void *(*cli)(void *)) {
+    (void)ls; /* this parameter is only used with USE_FORK */
     s_log(LOG_DEBUG, "Creating a new thread");
-    if(_beginthread((void(*)(void *))cli, NULL, arg->opt->stack_size, arg)==-1) {
+    if((long)_beginthread((void(*)(void *))cli, NULL, arg->opt->stack_size, arg)==-1L) {
         ioerror("_beginthread");
+        if(arg)
+            free(arg);
+        if(s>=0)
+            closesocket(s);
         return -1;
     }
     s_log(LOG_DEBUG, "New thread created");
@@ -441,15 +476,16 @@ int create_client(int ls, int s, CLI *arg, void *(*cli)(void *)) {
 
 #ifdef _WIN32_WCE
 
-int _beginthread(void (*start_address)(void *),
+long _beginthread(void (*start_address)(void *),
         int stack_size, void *arglist) {
     DWORD thread_id;
     HANDLE handle;
 
     handle=CreateThread(NULL, stack_size,
-        (LPTHREAD_START_ROUTINE)start_address, arglist, 0, &thread_id);
+        (LPTHREAD_START_ROUTINE)start_address, arglist,
+        STACK_SIZE_PARAM_IS_A_RESERVATION, &thread_id);
     if(!handle)
-        return -1;
+        return -1L;
     CloseHandle(handle);
     return 0;
 }
@@ -505,4 +541,4 @@ void stack_info(int init) { /* 1-initialize, 0-display */
 
 #endif /* DEBUG_STACK_SIZE */
 
-/* End of sthreads.c */
+/* end of sthreads.c */

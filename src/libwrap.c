@@ -1,6 +1,6 @@
 /*
  *   stunnel       Universal SSL tunnel
- *   Copyright (C) 1998-2009 Michal Trojnara <Michal.Trojnara@mirt.net>
+ *   Copyright (C) 1998-2011 Michal Trojnara <Michal.Trojnara@mirt.net>
  *
  *   This program is free software; you can redistribute it and/or modify it
  *   under the terms of the GNU General Public License as published by the
@@ -42,7 +42,7 @@
 
 #include <tcpd.h>
 
-static int check_libwrap(char *, int);
+static int check(char *, int);
 
 int allow_severity=LOG_NOTICE, deny_severity=LOG_WARNING;
 
@@ -70,10 +70,8 @@ void libwrap_init(int num) {
         die(1);
     }
     for(i=0; i<num_processes; ++i) { /* spawn a child */
-        if(socketpair(AF_UNIX, SOCK_STREAM, 0, ipc_socket+2*i)) {
-            sockerror("socketpair");
+        if(s_socketpair(AF_UNIX, SOCK_STREAM, 0, ipc_socket+2*i, 0, "libwrap_init"))
             die(1);
-        }
         switch(fork()) {
         case -1:    /* error */
             ioerror("fork");
@@ -82,37 +80,37 @@ void libwrap_init(int num) {
             drop_privileges(); /* libwrap processes are not chrooted */
             close(0); /* stdin */
             close(1); /* stdout */
-            if(!options.option.foreground) /* for logging in read_fd */
+            if(!global_options.option.foreground) /* for logging in read_fd */
                 close(2); /* stderr */
-            close(ipc_socket[2*i]); /* close server-side socket */
-            for(j=0; j<i; ++j) /* previously created client-side sockets */
-                close(ipc_socket[2*j+1]);
-            while(1) { /* main libwrap client loop */
+            for(j=0; j<=i; ++j) /* close parent-side sockets created so far */
+                close(ipc_socket[2*j]);
+            while(1) { /* main libwrap child loop */
                 if(read_fd(ipc_socket[2*i+1], servname, STRLEN, &rfd)<=0)
                     _exit(0);
-                result=check_libwrap(servname, rfd);
+                result=check(servname, rfd);
                 write(ipc_socket[2*i+1], (u8 *)&result, sizeof result);
                 if(rfd>=0)
                     close(rfd);
             }
         default:    /* parent */
-#ifdef FD_CLOEXEC
-            fcntl(ipc_socket[2*i], F_SETFD, FD_CLOEXEC); /* server-side socket */
-#endif
-            close(ipc_socket[2*i+1]); /* client-side socket */
+            close(ipc_socket[2*i+1]); /* child-side socket */
         }
     }
 #endif /* USE_PTHREAD */
 }
 
-void auth_libwrap(CLI *c) {
+void libwrap_auth(CLI *c) {
     int result=0; /* deny by default */
 #ifdef USE_PTHREAD
-    volatile static int num_busy=0, roundrobin=0;
+    static volatile int num_busy=0, roundrobin=0;
     int retval, my_process;
     static pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER;
     static pthread_cond_t cond=PTHREAD_COND_INITIALIZER;
+#endif /* USE_PTHREAD */
 
+    if(!c->opt->option.libwrap) /* libwrap is disabled for this service */
+        return; /* allow connection */
+#ifdef USE_PTHREAD
     if(num_processes) {
         s_log(LOG_DEBUG, "Waiting for a libwrap process");
 
@@ -177,20 +175,20 @@ void auth_libwrap(CLI *c) {
 #endif /* USE_PTHREAD */
     { /* use original, synchronous libwrap calls */
         enter_critical_section(CRIT_LIBWRAP);
-        result=check_libwrap(c->opt->servname, c->local_rfd.fd);
+        result=check(c->opt->servname, c->local_rfd.fd);
         leave_critical_section(CRIT_LIBWRAP);
     }
     if(!result) {
-        s_log(LOG_WARNING, "%s REFUSED by libwrap from %s",
+        s_log(LOG_WARNING, "Service %s REFUSED by libwrap from %s",
             c->opt->servname, c->accepted_address);
         s_log(LOG_DEBUG, "See hosts_access(5) manual for details");
         longjmp(c->err, 1);
     }
-    s_log(LOG_DEBUG, "%s permitted by libwrap from %s",
+    s_log(LOG_DEBUG, "Service %s permitted by libwrap from %s",
         c->opt->servname, c->accepted_address);
 }
 
-static int check_libwrap(char *name, int fd) {
+static int check(char *name, int fd) {
     struct request_info request;
 
     request_init(&request, RQ_DAEMON, name, RQ_FILE, fd, 0);
@@ -294,4 +292,4 @@ static ssize_t write_fd(int fd, void *ptr, size_t nbytes, int sendfd) {
 
 #endif /* USE_LIBWRAP */
 
-/* End of libwrap.c */
+/* end of libwrap.c */

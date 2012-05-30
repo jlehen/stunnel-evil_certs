@@ -1,6 +1,6 @@
 /*
  *   stunnel       Universal SSL tunnel
- *   Copyright (C) 1998-2009 Michal Trojnara <Michal.Trojnara@mirt.net>
+ *   Copyright (C) 1998-2011 Michal Trojnara <Michal.Trojnara@mirt.net>
  *
  *   This program is free software; you can redistribute it and/or modify it
  *   under the terms of the GNU General Public License as published by the
@@ -38,41 +38,36 @@
 #include "common.h"
 #include "prototypes.h"
 
-    /* Prototypes */
+/**************************************** prototypes */
+
 static void daemon_loop(void);
-static void accept_connection(LOCAL_OPTIONS *);
+static void accept_connection(SERVICE_OPTIONS *);
 static void get_limits(void); /* setup global max_clients and max_fds */
-#if !defined (USE_WIN32) && !defined (__vms)
+#if !defined(USE_WIN32) && !defined(__vms)
 static void change_root(void);
 static void daemonize(void);
 static void create_pid(void);
 static void delete_pid(void);
 #endif
+static int setup_fd(int, int, char *);
 
-    /* Error/exceptions handling functions */
-#ifndef USE_WIN32
-static void signal_handler(int);
+/**************************************** global variables */
+
+static int max_fds;
+static int max_clients=0;
+
+int volatile num_clients=0; /* current number of clients */
+s_poll_set fds; /* file descriptors of listening sockets */
+#if !defined(USE_WIN32) && !defined(USE_OS2)
+int signal_fd;
 #endif
 
-int volatile num_clients=0; /* Current number of clients */
-
-    /* Functions */
+/**************************************** startup */
 
 #ifndef USE_WIN32
 int main(int argc, char* argv[]) { /* execution begins here 8-) */
 
     main_initialize(argc>1 ? argv[1] : NULL, argc>2 ? argv[2] : NULL);
-
-    signal(SIGPIPE, SIG_IGN); /* avoid 'broken pipe' signal */
-    if(signal(SIGTERM, SIG_IGN)!=SIG_IGN)
-        signal(SIGTERM, signal_handler);
-    if(signal(SIGQUIT, SIG_IGN)!=SIG_IGN)
-        signal(SIGQUIT, signal_handler);
-    if(signal(SIGINT, SIG_IGN)!=SIG_IGN)
-        signal(SIGINT, signal_handler);
-    if(signal(SIGHUP, SIG_IGN)!=SIG_IGN)
-        signal(SIGHUP, signal_handler);
-    /* signal(SIGSEGV, signal_handler); */
 
     main_execute();
 
@@ -83,136 +78,97 @@ int main(int argc, char* argv[]) { /* execution begins here 8-) */
 void main_initialize(char *arg1, char *arg2) {
     ssl_init(); /* initialize SSL library */
     sthreads_init(); /* initialize critical sections & SSL callbacks */
-    parse_config(arg1, arg2);
+    parse_commandline(arg1, arg2);
 
-#ifdef USE_FIPS
-    if(options.option.fips) {
-        if(!FIPS_mode_set(1)) {
-            ERR_load_crypto_strings();
-            sslerror("FIPS_mode_set");
-            die(1);
-        } else
-            s_log(LOG_NOTICE, "stunnel is in FIPS mode");
-    } else
-        s_log(LOG_DEBUG, "FIPS mode disabled");
-#endif /* USE_FIPS */
-
+    max_fds=FD_SETSIZE; /* start with select() limit */
+    get_limits();
 #ifdef USE_LIBWRAP
-    /* spawn LIBWRAP_CLIENTS processes unless inetd mode is configured */
-    /* execute after parse_config() to know local_options.next, */
-    /* but as early as possible to avoid leaking file descriptors */
-    libwrap_init(local_options.next ? LIBWRAP_CLIENTS : 0);
+    /* spawn LIBWRAP_CLIENTS processes unless inetd mode is configured
+     * execute after parse_commandline() to know service_options.next,
+     * but as early as possible to avoid leaking file descriptors */
+    libwrap_init(service_options.next ? LIBWRAP_CLIENTS : 0);
 #endif /* USE_LIBWRAP */
+#if !defined(USE_WIN32) && !defined(__vms)
+    /* syslog_open() must be called before change_root()
+     * to be able to access /dev/log socket */
+    syslog_open();
+#endif /* !defined(USE_WIN32) && !defined(__vms) */
+#if !defined(USE_WIN32) && !defined(USE_OS2)
+    signal_fd=signal_pipe_init();
+#endif
+    if(!bind_ports())
+        die(1);
+
+#ifdef HAVE_CHROOT
+    /* change_root() must be called before drop_privileges()
+     * since chroot() needs root privileges */
+    change_root();
+#endif /* HAVE_CHROOT */
+
+#if !defined(USE_WIN32) && !defined(__vms) && !defined(USE_OS2)
+    drop_privileges();
+#endif /* standard Unix */
+
+    /* log_open() must be be called after drop_privileges()
+     * or logfile rotation won't be possible */
+    /* log_open() must be be called before daemonize()
+     * since daemonize() invalidates stderr */
     log_open();
-    log_flush();
-    stunnel_info(0);
+
+#if !defined(USE_WIN32) && !defined(__vms) && !defined(USE_OS2)
+    if(service_options.next) { /* there are service sections -> daemon mode */
+        if(!(global_options.option.foreground))
+            daemonize();
+        /* create_pid() must be called after drop_privileges()
+         * or it won't be possible to remove the file on exit */
+        /* create_pid() must be called after daemonize()
+         * since the final pid is not known beforehand */
+        create_pid();
+    }
+#endif /* standard Unix */
+
+    stunnel_info(LOG_NOTICE);
 }
 
 void main_execute(void) {
-    /* check if started from inetd */
-    if(local_options.next) { /* there are service sections -> daemon mode */
-        daemon_loop();
+    if(service_options.next) { /* there are service sections -> daemon mode */
+        num_clients=0;
+        while(1)
+            daemon_loop();
     } else { /* inetd mode */
-#if !defined (USE_WIN32) && !defined (__vms)
-        max_fds=FD_SETSIZE; /* just in case */
-#ifdef HAVE_CHROOT
-        change_root();
-#endif /* HAVE_CHROOT */
-        drop_privileges();
-#endif /* standard Unix */
         num_clients=1;
-        client(alloc_client_session(&local_options, 0, 1));
+        client(alloc_client_session(&service_options, 0, 1));
+        log_close();
     }
-    log_close();
 }
+
+/**************************************** main loop */
 
 static void daemon_loop(void) {
-    SOCKADDR_UNION addr;
-    s_poll_set fds;
-    LOCAL_OPTIONS *opt;
-    get_limits();
-    s_poll_init(&fds);
-#if !defined(USE_WIN32) && !defined(USE_OS2)
-    s_poll_add(&fds, signal_pipe_init(), 1, 0);
-#endif
-    if(!local_options.next) {
-        s_log(LOG_ERR, "No connections defined in config file");
-        die(1);
-    }
-    num_clients=0;
+    SERVICE_OPTIONS *opt;
 
-    /* bind local ports */
-    for(opt=local_options.next; opt; opt=opt->next) {
-        if(!opt->option.accept) /* no need to bind this service */
-            continue;
-        memcpy(&addr, &opt->local_addr.addr[0], sizeof addr);
-        if((opt->fd=socket(addr.sa.sa_family, SOCK_STREAM, 0))<0) {
-            sockerror("local socket");
-            die(1);
-        }
-        if(alloc_fd(opt->fd))
-            die(1);
-        if(set_socket_options(opt->fd, 0)<0)
-            die(1);
-        s_ntop(opt->local_address, &addr);
-        if(bind(opt->fd, &addr.sa, addr_len(addr))) {
-            s_log(LOG_ERR, "Error binding %s to %s",
-                opt->servname, opt->local_address);
-            sockerror("bind");
-            die(1);
-        }
-        s_log(LOG_DEBUG, "%s bound to %s", opt->servname, opt->local_address);
-        if(listen(opt->fd, 5)) {
-            sockerror("listen");
-            die(1);
-        }
-#ifdef FD_CLOEXEC
-        fcntl(opt->fd, F_SETFD, FD_CLOEXEC); /* close socket in child execvp */
-#endif
-        s_poll_add(&fds, opt->fd, 1, 0);
+    if(s_poll_wait(&fds, -1, -1)>=0) { /* non-critical error */
+        for(opt=service_options.next; opt; opt=opt->next)
+            if(s_poll_canread(&fds, opt->fd))
+                accept_connection(opt);
+    } else {
+        log_error(LOG_INFO, get_last_socket_error(),
+            "daemon_loop: s_poll_wait");
+        sleep(1); /* to avoid log trashing */
     }
-
-#if !defined (USE_WIN32) && !defined (__vms) && !defined(USE_OS2)
-    if(!(options.option.foreground))
-        daemonize();
-#ifdef HAVE_CHROOT
-    change_root();
-#endif /* HAVE_CHROOT */
-    drop_privileges();
-    create_pid();
-#endif /* standard Unix */
-    /* create exec+connect services */
-    for(opt=local_options.next; opt; opt=opt->next) {
-        if(opt->option.accept) /* skip ordinary (accepting) services */
-            continue;
-        enter_critical_section(CRIT_CLIENTS); /* for multi-cpu machines */
-        ++num_clients;
-        leave_critical_section(CRIT_CLIENTS);
-        create_client(-1, -1, alloc_client_session(opt, -1, -1), client);
-    }
-    while(1) {
-        if(s_poll_wait(&fds, -1, -1)<0) { /* non-critical error */
-            log_error(LOG_INFO, get_last_socket_error(),
-                "daemon_loop: s_poll_wait");
-            sleep(1); /* to avoid log trashing */
-        } else {
-            for(opt=local_options.next; opt; opt=opt->next)
-                if(s_poll_canread(&fds, opt->fd))
-                    accept_connection(opt);
-
-        }
-    }
-    s_log(LOG_ERR, "INTERNAL ERROR: End of infinite loop 8-)");
 }
 
-static void accept_connection(LOCAL_OPTIONS *opt) {
+static void accept_connection(SERVICE_OPTIONS *opt) {
     SOCKADDR_UNION addr;
     char from_address[IPLEN];
     int s;
     socklen_t addrlen;
 
     addrlen=sizeof addr;
-    while((s=accept(opt->fd, &addr.sa, &addrlen))<0) {
+    for(;;) {
+        s=s_accept(opt->fd, &addr.sa, &addrlen, 1, "local socket");
+        if(s>=0) /* success! */
+            break;
         switch(get_last_socket_error()) {
             case EINTR:
                 break; /* retry */
@@ -231,7 +187,7 @@ static void accept_connection(LOCAL_OPTIONS *opt) {
         }
     }
     s_ntop(from_address, &addr);
-    s_log(LOG_DEBUG, "%s accepted FD=%d from %s",
+    s_log(LOG_DEBUG, "Service %s accepted FD=%d from %s",
         opt->servname, s, from_address);
     if(max_clients && num_clients>=max_clients) {
         s_log(LOG_WARNING, "Connection rejected: too many clients (>=%d)",
@@ -239,9 +195,6 @@ static void accept_connection(LOCAL_OPTIONS *opt) {
         closesocket(s);
         return;
     }
-#ifdef FD_CLOEXEC
-    fcntl(s, F_SETFD, FD_CLOEXEC); /* close socket in child execvp */
-#endif
     if(create_client(opt->fd, s, alloc_client_session(opt, s, s), client)) {
         s_log(LOG_ERR, "Connection rejected: create_client failed");
         closesocket(s);
@@ -252,63 +205,101 @@ static void accept_connection(LOCAL_OPTIONS *opt) {
     leave_critical_section(CRIT_CLIENTS);
 }
 
-static void get_limits(void) {
-#ifdef USE_WIN32
-    max_clients=0;
-    s_log(LOG_NOTICE, "No limit detected for the number of clients");
-#else
-#if defined(USE_OS2) && defined(__INNOTEK_LIBC__)
-    /* OS/2 with the Innotek LIBC does not share the same handles between files
-     and socket connections.
-     */
-    max_clients=(FD_SETSIZE-6)/2;
-    max_fds=FD_SETSIZE;
-#else
-    max_fds=0; /* unlimited */
+/**************************************** initialization helpers */
 
-#if defined HAVE_SYSCONF
-    max_fds=sysconf(_SC_OPEN_MAX);
-    if(max_fds<0)
+/* close old ports, open new ports, update fds */
+int bind_ports(void) {
+    SERVICE_OPTIONS *opt;
+    static SERVICE_OPTIONS *prev_opt=NULL;
+    SOCKADDR_UNION addr;
+
+    s_poll_init(&fds);
+#if !defined(USE_WIN32) && !defined(USE_OS2)
+    s_poll_add(&fds, signal_fd, 1, 0);
+#endif
+
+    for(opt=prev_opt; opt; opt=opt->next)
+        if(opt->option.accept) {
+            closesocket(opt->fd);
+            s_log(LOG_DEBUG, "Service %s closed FD=%d",
+                opt->servname, opt->fd);
+        }
+    prev_opt=service_options.next;
+
+    for(opt=prev_opt; opt; opt=opt->next) {
+        if(opt->option.accept) {
+            memcpy(&addr, &opt->local_addr.addr[0], sizeof addr);
+            opt->fd=s_socket(addr.sa.sa_family, SOCK_STREAM, 0, 1, "accept socket");
+            if(opt->fd<0)
+                return 0;
+            if(set_socket_options(opt->fd, 0)<0)
+                return 0;
+            s_ntop(opt->local_address, &addr);
+            if(bind(opt->fd, &addr.sa, addr_len(addr))) {
+                s_log(LOG_ERR, "Error binding %s to %s",
+                    opt->servname, opt->local_address);
+                sockerror("bind");
+                return 0;
+            }
+            s_log(LOG_DEBUG, "Service %s bound to %s",
+                opt->servname, opt->local_address);
+            if(listen(opt->fd, 5)) {
+                sockerror("listen");
+                return 0;
+            }
+            s_poll_add(&fds, opt->fd, 1, 0);
+            s_log(LOG_DEBUG, "Service %s opened FD=%d",
+                opt->servname, opt->fd);
+        } else { /* create exec+connect services */
+            enter_critical_section(CRIT_CLIENTS);
+            ++num_clients;
+            leave_critical_section(CRIT_CLIENTS);
+            create_client(-1, -1, alloc_client_session(opt, -1, -1), client);
+        }
+    }
+    return 1; /* OK */
+}
+
+static void get_limits(void) {
+#if defined(USE_WIN32) || defined(USE_POLL)
+    max_fds=0; /* unlimited */
+#elif defined(USE_OS2) && defined(__INNOTEK_LIBC__)
+    /* OS/2 with the Innotek LIBC does not share the same
+       handles between files and socket connections */
+#else /* Unix */
+#if defined(HAVE_SYSCONF)
+    int open_max;
+
+    open_max=sysconf(_SC_OPEN_MAX);
+    if(open_max<0)
         ioerror("sysconf");
-#elif defined HAVE_GETRLIMIT
+    if(open_max<max_fds)
+        max_fds=open_max;
+#elif defined(HAVE_GETRLIMIT)
     struct rlimit rlim;
+
     if(getrlimit(RLIMIT_NOFILE, &rlim)<0)
         ioerror("getrlimit");
-    else
+    if(rlim.rlim_cur!=RLIM_INFINITY && rlim.rlim_cur<max_fds)
         max_fds=rlim.rlim_cur;
-    if(max_fds==RLIM_INFINITY)
-        max_fds=0; /* RLIM_INFINITY should be equal to zero, anyway */
-#endif
-    s_log(LOG_INFO, "file ulimit = %d%s (can be changed with 'ulimit -n')",
-        max_fds, max_fds ? "" : " (unlimited)");
-#ifdef USE_POLL
-    s_log(LOG_INFO, "poll() used - no FD_SETSIZE limit for file descriptors");
-#else
-    s_log(LOG_INFO,
-        "FD_SETSIZE = %d (some systems allow to increase this value)",
-        FD_SETSIZE);
-    if(!max_fds || max_fds>FD_SETSIZE)
-        max_fds=FD_SETSIZE;
-#endif
+#endif /* HAVE_SYSCONF || HAVE_GETRLIMIT */
+#endif /* Unix */
     if(max_fds && max_fds<16) /* stunnel needs at least 16 file desriptors */
         max_fds=16;
+
     if(max_fds) {
         max_clients=max_fds>=256 ? max_fds*125/256 : (max_fds-6)/2;
-        s_log(LOG_NOTICE, "%d clients allowed", max_clients);
+        s_log(LOG_NOTICE, "Clients allowed=%d", max_clients);
     } else {
         max_clients=0;
         s_log(LOG_NOTICE, "No limit detected for the number of clients");
     }
-#endif
-#endif
 }
-
-#if !defined (USE_WIN32) && !defined (__vms) && !defined(USE_OS2)
 
 #ifdef HAVE_CHROOT
 static void change_root(void) {
-    if(options.chroot_dir) {
-        if(chroot(options.chroot_dir)) {
+    if(global_options.chroot_dir) {
+        if(chroot(global_options.chroot_dir)) {
             sockerror("chroot");
             die(1);
         }
@@ -320,27 +311,29 @@ static void change_root(void) {
 }
 #endif /* HAVE_CHROOT */
 
+#if !defined(USE_WIN32) && !defined(__vms) && !defined(USE_OS2)
+
 void drop_privileges(void) {
 #ifdef HAVE_SETGROUPS
     gid_t gr_list[1];
 #endif
 
-    /* Set uid and gid */
-    if(options.gid) {
-        if(setgid(options.gid)) {
+    /* set uid and gid */
+    if(global_options.gid) {
+        if(setgid(global_options.gid)) {
             sockerror("setgid");
             die(1);
         }
 #ifdef HAVE_SETGROUPS
-        gr_list[0]=options.gid;
+        gr_list[0]=global_options.gid;
         if(setgroups(1, gr_list)) {
             sockerror("setgroups");
             die(1);
         }
 #endif
     }
-    if(options.uid) {
-        if(setuid(options.uid)) {
+    if(global_options.uid) {
+        if(setuid(global_options.uid)) {
             sockerror("setuid");
             die(1);
         }
@@ -348,8 +341,13 @@ void drop_privileges(void) {
 }
 
 static void daemonize(void) { /* go to background */
+    close(0);
+    close(1);
+    close(2);
 #if defined(HAVE_DAEMON) && !defined(__BEOS__)
-    if(daemon(0, 0)==-1) {
+    /* set noclose option when calling daemon() function,
+     * so it does not require /dev/null device in the chrooted directory */
+    if(daemon(0, 1)==-1) {
         ioerror("daemon");
         die(1);
     }
@@ -364,12 +362,9 @@ static void daemonize(void) { /* go to background */
     default:    /* parent */
         die(0);
     }
-    close(0);
-    close(1);
-    close(2);
 #endif
 #ifdef HAVE_SETSID
-    setsid(); /* Ignore the error */
+    setsid(); /* ignore the error */
 #endif
 }
 
@@ -377,55 +372,181 @@ static void create_pid(void) {
     int pf;
     char pid[STRLEN];
 
-    if(!options.pidfile) {
+    if(!global_options.pidfile) {
         s_log(LOG_DEBUG, "No pid file being created");
         return;
     }
-    if(options.pidfile[0]!='/') {
-        s_log(LOG_ERR, "Pid file (%s) must be full path name", options.pidfile);
-        /* Why?  Because we don't want to confuse by
-           allowing '.', which would be '/' after
-           daemonizing) */
+    if(global_options.pidfile[0]!='/') {
+        /* to prevent creating pid file relative to '/' after daemonize() */
+        s_log(LOG_ERR, "Pid file (%s) must be full path name", global_options.pidfile);
         die(1);
     }
-    options.dpid=(unsigned long)getpid();
+    global_options.dpid=(unsigned long)getpid();
 
     /* silently remove old pid file */
-    unlink(options.pidfile);
-    if((pf=open(options.pidfile, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL,0644))==-1) {
-        s_log(LOG_ERR, "Cannot create pid file %s", options.pidfile);
+    unlink(global_options.pidfile);
+    if((pf=open(global_options.pidfile, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL,0644))==-1) {
+        s_log(LOG_ERR, "Cannot create pid file %s", global_options.pidfile);
         ioerror("create");
         die(1);
     }
-    sprintf(pid, "%lu\n", options.dpid);
+    sprintf(pid, "%lu\n", global_options.dpid);
     write(pf, pid, strlen(pid));
     close(pf);
-    s_log(LOG_DEBUG, "Created pid file %s", options.pidfile);
+    s_log(LOG_DEBUG, "Created pid file %s", global_options.pidfile);
     atexit(delete_pid);
 }
 
 static void delete_pid(void) {
-    s_log(LOG_DEBUG, "removing pid file %s", options.pidfile);
-    if((unsigned long)getpid()!=options.dpid)
+    s_log(LOG_DEBUG, "removing pid file %s", global_options.pidfile);
+    if((unsigned long)getpid()!=global_options.dpid)
         return; /* current process is not main daemon process */
-    if(unlink(options.pidfile)<0)
-        ioerror(options.pidfile); /* not critical */
-}
-
-static void signal_handler(int sig) { /* signal handler */
-    s_log(sig==SIGTERM ? LOG_NOTICE : LOG_ERR,
-        "Received signal %d; terminating", sig);
-    die(3);
+    if(unlink(global_options.pidfile)<0)
+        ioerror(global_options.pidfile); /* not critical */
 }
 
 #endif /* standard Unix */
 
-void stunnel_info(int raw) {
+/**************************************** file descriptor validation */
+
+#if defined USE_NEW_LINUX_API && defined HAVE_SOCKET4
+#define USE_NEW_LINUX_API 1
+#endif
+
+int s_socket(int domain, int type, int protocol, int nonblock, char *msg) {
+#ifdef USE_NEW_LINUX_API
+    if(nonblock)
+        type|=SOCK_NONBLOCK|SOCK_CLOEXEC;
+    else
+        type|=SOCK_CLOEXEC;
+#endif
+    return setup_fd(socket(domain, type, protocol), nonblock, msg);
+}
+
+int s_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen,
+        int nonblock, char *msg) {
+    int fd;
+
+#ifdef USE_NEW_LINUX_API
+    if(nonblock)
+        fd=accept4(sockfd, addr, addrlen, SOCK_NONBLOCK|SOCK_CLOEXEC);
+    else
+        fd=accept4(sockfd, addr, addrlen, SOCK_CLOEXEC);
+#else
+    fd=accept(sockfd, addr, addrlen);
+#endif
+    return setup_fd(fd, nonblock, msg);
+}
+
+#ifndef USE_WIN32
+
+int s_socketpair(int domain, int type, int protocol, int sv[2],
+        int nonblock, char *msg) {
+#ifdef USE_NEW_LINUX_API
+    if(nonblock)
+        type|=SOCK_NONBLOCK|SOCK_CLOEXEC;
+    else
+        type|=SOCK_CLOEXEC;
+#endif
+    if(socketpair(domain, type, protocol, sv)<0) {
+        ioerror(msg);
+        return -1;
+    }
+    if(setup_fd(sv[0], nonblock, msg)<0) {
+        closesocket(sv[1]);
+        return -1;
+    }
+    if(setup_fd(sv[1], nonblock, msg)<0) {
+        closesocket(sv[0]);
+        return -1;
+    }
+    return 0;
+}
+
+int s_pipe(int pipefd[2], int nonblock, char *msg) {
+    int retval;
+
+#ifdef USE_NEW_LINUX_API
+    if(nonblock)
+        retval=pipe2(pipefd, O_NONBLOCK|O_CLOEXEC);
+    else
+        retval=pipe2(pipefd, O_CLOEXEC);
+#else
+    retval=pipe(pipefd);
+#endif
+    if(retval<0) {
+        ioerror(msg);
+        return -1;
+    }
+    if(setup_fd(pipefd[0], nonblock, msg)<0) {
+        close(pipefd[1]);
+        return -1;
+    }
+    if(setup_fd(pipefd[1], nonblock, msg)<0) {
+        close(pipefd[0]);
+        return -1;
+    }
+    return 0;
+}
+
+#endif /* USE_WIN32 */
+
+/* try to use non-POSIX O_NDELAY on obsolete BSD systems */
+#if !defined O_NONBLOCK && defined O_NDELAY
+#define O_NONBLOCK O_NDELAY
+#endif
+
+static int setup_fd(int fd, int nonblock, char *msg) {
+#ifdef USE_WIN32
+    unsigned long l;
+#else /* USE_WIN32 */
+    int err, flags;
+#endif /* USE_WIN32 */
+
+    if(fd<0) {
+        sockerror(msg);
+        return -1;
+    }
+    if(max_fds && fd>=max_fds) {
+        s_log(LOG_ERR,
+            "%s: FD=%d out of range (max %d)", msg, fd, max_fds);
+        closesocket(fd);
+        return -1;
+    }
+#ifndef USE_NEW_LINUX_API
+#if defined F_GETFL && defined F_SETFL && defined O_NONBLOCK && !defined __INNOTEK_LIBC__
+    do {
+        flags=fcntl(fd, F_GETFL, 0);
+    } while(flags<0 && get_last_socket_error()==EINTR);
+    if(nonblock)
+        flags|=O_NONBLOCK;
+    else
+        flags&=~O_NONBLOCK;
+#ifdef FD_CLOEXEC
+    flags|=FD_CLOEXEC;
+#endif /* FD_CLOEXEC */
+    do {
+        err=fcntl(fd, F_SETFL, flags);
+    } while(err<0 && get_last_socket_error()==EINTR);
+    if(err<0)
+        sockerror("fcntl"); /* non-critical */
+#else /* use fcntl() */
+    if(ioctlsocket(fd, FIONBIO, &l)<0)
+        sockerror("ioctlsocket"); /* non-critical */
+#endif /* use fcntl() */
+#endif /* USE_NEW_LINUX_API */
+    s_log(LOG_DEBUG, "%s: FD=%d allocated (%sblocking mode)",
+        msg, fd, nonblock?"non-":"");
+    return fd;
+}
+
+/**************************************** log messages to identify  build */
+
+void stunnel_info(int level) {
     char line[STRLEN];
 
-    sprintf(line, "stunnel " VERSION " on " HOST " with %s",
+    s_log(level, "stunnel " STUNNEL_VERSION " on " HOST " with %s",
         SSLeay_version(SSLEAY_VERSION));
-    s_log(raw ? LOG_RAW : LOG_NOTICE, "%s", line);
 
     safecopy(line, "Threading:");
 #ifdef USE_UCONTEXT
@@ -474,11 +595,13 @@ void stunnel_info(int raw) {
     safeconcat(line, " Auth:LIBWRAP");
 #endif
 
-    s_log(raw ? LOG_RAW : LOG_NOTICE, "%s", line);
+    s_log(level, "%s", line);
 }
 
+/**************************************** fatal error */
+
 void die(int status) { /* some cleanup and exit */
-    log_flush();
+    log_flush(LOG_MODE_ERROR);
 #ifdef USE_WIN32
     exit_win32(status);
 #else
@@ -486,4 +609,4 @@ void die(int status) { /* some cleanup and exit */
 #endif
 }
 
-/* End of stunnel.c */
+/* end of stunnel.c */
