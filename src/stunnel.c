@@ -55,7 +55,7 @@ static int setup_fd(int, int, char *);
 static int max_fds;
 static int max_clients=0;
 
-int volatile num_clients=0; /* current number of clients */
+volatile int num_clients=0; /* current number of clients */
 s_poll_set fds; /* file descriptors of listening sockets */
 int signal_fd;
 
@@ -224,6 +224,7 @@ void unbind_ports(void) {
 int bind_ports(void) {
     SERVICE_OPTIONS *opt;
     SOCKADDR_UNION addr;
+    char local_address[IPLEN];
 
     s_poll_init(&fds);
     s_poll_add(&fds, signal_fd, 1, 0);
@@ -237,16 +238,16 @@ int bind_ports(void) {
                 closesocket(opt->fd);
                 return 1;
             }
-            s_ntop(opt->local_address, &addr);
+            s_ntop(local_address, &addr);
             if(bind(opt->fd, &addr.sa, addr_len(addr))) {
                 s_log(LOG_ERR, "Error binding %s to %s",
-                    opt->servname, opt->local_address);
+                    opt->servname, local_address);
                 sockerror("bind");
                 closesocket(opt->fd);
                 return 1;
             }
             s_log(LOG_DEBUG, "Service %s bound to %s",
-                opt->servname, opt->local_address);
+                opt->servname, local_address);
             if(listen(opt->fd, SOMAXCONN)) {
                 sockerror("listen");
                 closesocket(opt->fd);
@@ -393,7 +394,8 @@ static void create_pid(void) {
 
     /* silently remove old pid file */
     unlink(global_options.pidfile);
-    if((pf=open(global_options.pidfile, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL,0644))==-1) {
+    pf=open(global_options.pidfile, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL, 0644);
+    if(pf==-1) {
         s_log(LOG_ERR, "Cannot create pid file %s", global_options.pidfile);
         ioerror("create");
         die(1);
@@ -407,9 +409,9 @@ static void create_pid(void) {
 }
 
 static void delete_pid(void) {
-    s_log(LOG_DEBUG, "removing pid file %s", global_options.pidfile);
     if((unsigned long)getpid()!=global_options.dpid)
         return; /* current process is not main daemon process */
+    s_log(LOG_DEBUG, "removing pid file %s", global_options.pidfile);
     if(unlink(global_options.pidfile)<0)
         ioerror(global_options.pidfile); /* not critical */
 }
@@ -626,6 +628,7 @@ void stunnel_info(int level) {
 /**************************************** fatal error */
 
 void die(int status) { /* some cleanup and exit */
+    str_stats();
     log_flush(LOG_MODE_ERROR);
 #ifdef USE_WIN32
     win_exit(status);

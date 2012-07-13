@@ -57,18 +57,18 @@ static void log_time(const int, const char *, ASN1_TIME *);
 
 int verify_init(SERVICE_OPTIONS *section) {
     if(section->verify_level<0)
-        return 1; /* no certificate verification */
+        return 0; /* OK - no certificate verification */
 
-    if(section->verify_level>1 && !section->ca_file && !section->ca_dir) {
+    if(section->verify_level>=2 && !section->ca_file && !section->ca_dir) {
         s_log(LOG_ERR,
             "Either CApath or CAfile has to be used for authentication");
-        return 0;
+        return 1; /* FAILED */
     }
 
     section->revocation_store=X509_STORE_new();
     if(!section->revocation_store) {
         sslerror("X509_STORE_new");
-        return 0;
+        return 1; /* FAILED */
     }
 
     if(section->ca_file) {
@@ -77,15 +77,15 @@ int verify_init(SERVICE_OPTIONS *section) {
             s_log(LOG_ERR, "Error loading verify certificates from %s",
                 section->ca_file);
             sslerror("SSL_CTX_load_verify_locations");
-            return 0;
+            return 1; /* FAILED */
         }
         /* list of trusted CAs for the client to choose the right cert */
         SSL_CTX_set_client_CA_list(section->ctx,
             SSL_load_client_CA_file(section->ca_file));
         s_log(LOG_DEBUG, "Loaded verify certificates from %s",
             section->ca_file);
-        if(!load_file_lookup(section->revocation_store, section->ca_file))
-            return 0;
+        if(load_file_lookup(section->revocation_store, section->ca_file))
+            return 1; /* FAILED */
     }
 
     if(section->ca_dir) {
@@ -94,27 +94,28 @@ int verify_init(SERVICE_OPTIONS *section) {
             s_log(LOG_ERR, "Error setting verify directory to %s",
                 section->ca_dir);
             sslerror("SSL_CTX_load_verify_locations");
-            return 0;
+            return 1; /* FAILED */
         }
         s_log(LOG_DEBUG, "Verify directory set to %s", section->ca_dir);
         add_dir_lookup(section->revocation_store, section->ca_dir);
     }
 
     if(section->crl_file)
-        if(!load_file_lookup(section->revocation_store, section->crl_file))
-            return 0;
+        if(load_file_lookup(section->revocation_store, section->crl_file))
+            return 1; /* FAILED */
 
     if(section->crl_dir) {
         section->revocation_store->cache=0; /* don't cache CRLs */
         add_dir_lookup(section->revocation_store, section->crl_dir);
     }
 
-    SSL_CTX_set_verify(section->ctx, section->verify_level==SSL_VERIFY_NONE ?
-        SSL_VERIFY_PEER : section->verify_level, verify_callback);
+    SSL_CTX_set_verify(section->ctx, SSL_VERIFY_PEER |
+        (section->verify_level>=2 ? SSL_VERIFY_FAIL_IF_NO_PEER_CERT : 0),
+        verify_callback);
 
-    if(section->ca_dir && section->verify_use_only_my)
-        s_log(LOG_NOTICE, "Peer certificate location %s", section->ca_dir);
-    return 1; /* OK */
+    if(section->ca_dir && section->verify_level>=3)
+        s_log(LOG_INFO, "Peer certificate location %s", section->ca_dir);
+    return 0; /* OK */
 }
 
 static int load_file_lookup(X509_STORE *store, char *name) {
@@ -123,15 +124,15 @@ static int load_file_lookup(X509_STORE *store, char *name) {
     lookup=X509_STORE_add_lookup(store, X509_LOOKUP_file());
     if(!lookup) {
         sslerror("X509_STORE_add_lookup");
-        return 0;
+        return 1; /* FAILED */
     }
     if(!X509_LOOKUP_load_file(lookup, name, X509_FILETYPE_PEM)) {
         s_log(LOG_ERR, "Failed to load %s revocation lookup file", name);
         sslerror("X509_LOOKUP_load_file");
-        return 0;
+        return 1; /* FAILED */
     }
     s_log(LOG_DEBUG, "Loaded %s revocation lookup file", name);
-    return 1; /* OK */
+    return 0; /* OK */
 }
 
 static int add_dir_lookup(X509_STORE *store, char *name) {
@@ -140,15 +141,15 @@ static int add_dir_lookup(X509_STORE *store, char *name) {
     lookup=X509_STORE_add_lookup(store, X509_LOOKUP_hash_dir());
     if(!lookup) {
         sslerror("X509_STORE_add_lookup");
-        return 0;
+        return 1; /* FAILED */
     }
     if(!X509_LOOKUP_add_dir(lookup, name, X509_FILETYPE_PEM)) {
         s_log(LOG_ERR, "Failed to add %s revocation lookup directory", name);
         sslerror("X509_LOOKUP_add_dir");
-        return 0;
+        return 1; /* FAILED */
     }
     s_log(LOG_DEBUG, "Added %s revocation lookup directory", name);
-    return 1; /* OK */
+    return 0; /* OK */
 }
 
 /**************************************** verify callback */
@@ -201,7 +202,7 @@ static int cert_check(CLI *c, X509_STORE_CTX *callback_ctx, int preverify_ok) {
     X509_OBJECT obj;
     ASN1_BIT_STRING *local_key, *peer_key;
 
-    if(c->opt->verify_level==SSL_VERIFY_NONE) {
+    if(c->opt->verify_level<1) {
         s_log(LOG_INFO, "CERT: Verification not enabled");
         return 1; /* accept connection */
     }
@@ -211,7 +212,7 @@ static int cert_check(CLI *c, X509_STORE_CTX *callback_ctx, int preverify_ok) {
             X509_verify_cert_error_string(callback_ctx->error));
         return 0; /* reject connection */
     }
-    if(c->opt->verify_use_only_my && callback_ctx->error_depth==0) {
+    if(c->opt->verify_level>=3 && callback_ctx->error_depth==0) {
         if(X509_STORE_get_by_subject(callback_ctx, X509_LU_X509,
                 X509_get_subject_name(callback_ctx->current_cert), &obj)!=1) {
             s_log(LOG_WARNING, "CERT: Certificate not found in local repository");
@@ -224,6 +225,7 @@ static int cert_check(CLI *c, X509_STORE_CTX *callback_ctx, int preverify_ok) {
             s_log(LOG_WARNING, "CERT: Public keys do not match");
             return 0; /* reject connection */
         }
+        s_log(LOG_INFO, "CERT: Locally installed certificate matched");
     }
     return 1; /* accept connection */
 }
