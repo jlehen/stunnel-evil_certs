@@ -56,6 +56,7 @@ static int win_main(HINSTANCE, HINSTANCE, LPSTR, int);
 static void save_file(HWND);
 static LRESULT CALLBACK about_proc(HWND, UINT, WPARAM, LPARAM);
 static LRESULT CALLBACK pass_proc(HWND, UINT, WPARAM, LPARAM);
+static void update_logs(void);
 static LPTSTR log_txt(void);
 static void set_visible(int);
 static void error_box(const LPTSTR);
@@ -89,7 +90,7 @@ static HWND hwnd=NULL;
 static HWND hwndCB; /* command bar handle */
 #endif
 static HANDLE small_icon; /* 16x16 icon */
-TCHAR win32_name[STRLEN];
+TCHAR *win32_name;
 
 #ifndef _WIN32_WCE
 static SERVICE_STATUS serviceStatus;
@@ -108,20 +109,20 @@ GETNAMEINFO s_getnameinfo;
 #endif
 
 static struct {
-    char config_file[STRLEN];
+    char *config_file;
     unsigned int install:1, uninstall:1, start:1, stop:1, service:1, quiet:1;
 } cmdline;
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 #ifdef _WIN32_WCE
-    LPWSTR lpCmdLine,
+        LPWSTR lpCmdLine,
 #else
-    LPSTR lpCmdLine,
+        LPSTR lpCmdLine,
 #endif
-    int nCmdShow) {
-
+        int nCmdShow) {
     LPSTR command_line;
 
+    str_init(); /* initialize per-thread string management */
 #ifdef _WIN32_WCE
     command_line=tstr2str(lpCmdLine);
 #else
@@ -139,11 +140,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     /* setup the initial window caption before reading the configuration file
      * global_options.win32_service may not be used here */
 #ifdef _WIN32_WCE
-    _tcscpy(win32_name, TEXT("stunnel ") TEXT(STUNNEL_VERSION)
-        TEXT(" on Windows CE (not configured)"));
+    win32_name=TEXT("stunnel ") TEXT(STUNNEL_VERSION)
+        TEXT(" on Windows CE (not configured)");
 #else
-    _tcscpy(win32_name, TEXT("stunnel ") TEXT(STUNNEL_VERSION)
-        TEXT(" on Win32 (not configured)"));
+    win32_name=TEXT("stunnel ") TEXT(STUNNEL_VERSION)
+        TEXT(" on Win32 (not configured)");
 #endif
 
     if(initialize_winsock())
@@ -153,11 +154,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         main_initialize(
             cmdline.config_file[0] ? cmdline.config_file : NULL, NULL);
 #ifdef _WIN32_WCE
-        _tcscpy(win32_name, TEXT("stunnel ") TEXT(STUNNEL_VERSION)
+        win32_name=TEXT("stunnel ") TEXT(STUNNEL_VERSION)
             TEXT(" on Windows CE"));
 #else
         /* update the information */
-        _snprintf(win32_name, STRLEN, "stunnel %s on Win32 (%s)",
+        win32_name=str_printf("stunnel %s on Win32 (%s)",
             STUNNEL_VERSION, global_options.win32_service);
         if(!cmdline.service) {
             if(cmdline.install)
@@ -183,9 +184,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 }
 
 static void parse_cmdline(LPSTR command_line) {
-    char line[STRLEN], *c, *opt;
+    char *line, *c, *opt;
 
-    safecopy(line, command_line);
+    line=str_dup(command_line);
     memset(&cmdline, 0, sizeof cmdline);
 
     c=line;
@@ -208,26 +209,27 @@ static void parse_cmdline(LPSTR command_line) {
         else if(!strcasecmp(opt+1, "quiet"))
             cmdline.quiet=1;
         else { /* option to be processed in options.c */
-            safecopy(cmdline.config_file, opt);
+            cmdline.config_file=str_dup(opt);
+            str_free(line);
             return; /* no need to parse other options */
         }
     }
-
-    safecopy(cmdline.config_file, c);
+    cmdline.config_file=str_dup(c);
+    str_free(line);
 }
 
 #ifndef _WIN32_WCE
 static int set_cwd(void) {
-    char *c, errmsg[STRLEN], exe_file_name[STRLEN];
+    char *c, *errmsg, exe_file_name[MAX_PATH];
 
-    GetModuleFileName(0, exe_file_name, STRLEN);
+    GetModuleFileName(0, exe_file_name, MAX_PATH);
     c=strrchr(exe_file_name, '\\'); /* last backslash */
     if(c) /* found */
         c[1]='\0'; /* truncate program name */
     if(!SetCurrentDirectory(exe_file_name)) {
-        safecopy(errmsg, "Cannot set directory to ");
-        safeconcat(errmsg, exe_file_name);
+        errmsg=str_printf("Cannot set directory to %s", exe_file_name);
         MessageBox(hwnd, errmsg, TEXT("stunnel"), MB_ICONERROR);
+        str_free(errmsg);
         return 1;
     }
     return 0;
@@ -332,7 +334,7 @@ static int win_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         set_visible(1);
 #ifndef _WIN32_WCE
         EnableMenuItem(hmainmenu, IDM_RELOAD, MF_GRAYED);
-#endif  
+#endif
         EnableMenuItem(htraymenu, IDM_RELOAD, MF_GRAYED);
     } else /* create the main thread */
         _beginthread(ThreadFunc, DEFAULT_STACK_SIZE, NULL);
@@ -388,7 +390,6 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
     NOTIFYICONDATA nid;
     POINT pt;
     RECT rect;
-    LPTSTR txt;
 
 #if 0
     if(message!=WM_CTLCOLORSTATIC && message!=WM_TIMER)
@@ -435,9 +436,7 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         return TRUE;
 
     case WM_SETFOCUS:
-        txt=log_txt();
-        SetWindowText(EditControl, txt);
-        free(txt);
+        update_logs();
         SetFocus(EditControl);
         return TRUE;
 
@@ -540,50 +539,53 @@ static LRESULT CALLBACK about_proc(HWND hDlg, UINT message,
 
 static LRESULT CALLBACK pass_proc(HWND hDlg, UINT message,
         WPARAM wParam, LPARAM lParam) {
-    TCHAR titlebar[STRLEN];
-    WORD cchPassword;
-    LPTSTR keyFileName;
-    TCHAR sPassword[PEM_BUFSIZE];
-    char* cPassword;
+    char *titlebar;
+    LPTSTR tstr;
+    union {
+        TCHAR txt[PEM_BUFSIZE];
+        WORD len;
+    } pass_dialog;
+    WORD pass_len;
+    char* pass_txt;
 
     switch(message) {
     case WM_INITDIALOG:
         /* set the default push button to "Cancel" */
         SendMessage(hDlg, DM_SETDEFID, (WPARAM) IDCANCEL, (LPARAM) 0);
 
-        keyFileName = str2tstr(ui_data->section->key);
-        _sntprintf(titlebar, STRLEN, TEXT("Private key: %s"),
-            keyFileName);
-        free(keyFileName);    
-        SetWindowText(hDlg, titlebar);
+        titlebar=str_printf("Private key: %s", ui_data->section->key);
+        tstr=str2tstr(titlebar);
+        str_free(titlebar);
+        SetWindowText(hDlg, tstr);
+        str_free(tstr);
         return TRUE;
 
     case WM_COMMAND:
         /* set the default push button to "OK" when the user enters text */
-        if(HIWORD (wParam) == EN_CHANGE && LOWORD(wParam) == IDE_PASSEDIT)
-            SendMessage(hDlg, DM_SETDEFID, (WPARAM) IDOK, (LPARAM) 0);
+        if(HIWORD(wParam)==EN_CHANGE && LOWORD(wParam)==IDE_PASSEDIT)
+            SendMessage(hDlg, DM_SETDEFID, (WPARAM)IDOK, (LPARAM)0);
         switch(wParam) {
         case IDOK:
             /* get number of characters */
-            cchPassword=(WORD)SendDlgItemMessage(hDlg,
-                IDE_PASSEDIT, EM_LINELENGTH, (WPARAM) 0, (LPARAM) 0);
-            if(!cchPassword || cchPassword>=PEM_BUFSIZE) {
+            pass_len=(WORD)SendDlgItemMessage(hDlg,
+                IDE_PASSEDIT, EM_LINELENGTH, (WPARAM)0, (LPARAM)0);
+            if(!pass_len || pass_len>=PEM_BUFSIZE) {
                 EndDialog(hDlg, FALSE);
                 return FALSE;
             }
 
             /* put the number of characters into first word of buffer */
-            *((LPWORD) sPassword)=cchPassword;
+            pass_dialog.len=pass_len;
 
             /* get the characters */
             SendDlgItemMessage(hDlg, IDE_PASSEDIT, EM_GETLINE,
-                (WPARAM) 0, /* line 0 */ (LPARAM)sPassword);
-            sPassword[cchPassword]='\0'; /* null-terminate the string */
-            
+                (WPARAM)0 /* line 0 */, (LPARAM)pass_dialog.txt);
+            pass_dialog.txt[pass_len]='\0'; /* null-terminate the string */
+
             /* convert input password to ANSI string (as ui_data->pass) */
-            cPassword = tstr2str(sPassword);
-            strcpy(ui_data->pass, cPassword);
-            free(cPassword);
+            pass_txt=tstr2str(pass_dialog.txt);
+            strcpy(ui_data->pass, pass_txt);
+            str_free(pass_txt);
 
             EndDialog(hDlg, TRUE);
             return TRUE;
@@ -660,11 +662,19 @@ static void save_file(HWND hwnd) {
         return;
     }
 
-    txt=log_txt();
+    txt=log_txt(); /* need to convert the result to plain ASCII */
+    if(!txt) {
+        CloseHandle(hFile);
+        error_box(TEXT("Out of memory"));
+    }
     str=tstr2str(txt);
-    free(txt);
+    str_free(txt);
+    if(!str) {
+        CloseHandle(hFile);
+        error_box(TEXT("Out of memory"));
+    }
     bResult=WriteFile(hFile, str, strlen(str), &nWritten, NULL);
-    free(str);
+    str_free(str);
     if(!bResult)
         error_box(TEXT("WriteFile"));
     CloseHandle(hFile);
@@ -678,10 +688,11 @@ void win_log(LPSTR line) { /* also used in log.c */
 
     txt=str2tstr(line);
     len=_tcslen(txt);
+    /* this list is shared between threads */
     curr=malloc(sizeof(struct LIST)+len*sizeof(TCHAR));
     curr->len=len;
     _tcscpy(curr->txt, txt);
-    free(txt);
+    str_free(txt);
     curr->next=NULL;
 
     enter_critical_section(CRIT_WIN_LOG);
@@ -694,15 +705,23 @@ void win_log(LPSTR line) { /* also used in log.c */
     while(log_len>LOG_LINES) {
         curr=head;
         head=head->next;
+        /* this list is shared between threads */
         free(curr);
         log_len--;
     }
     leave_critical_section(CRIT_WIN_LOG);
 
-    if(visible) {
-        txt=log_txt();
+    if(visible)
+        update_logs();
+}
+
+static void update_logs(void) {
+    LPTSTR txt;
+
+    txt=log_txt();
+    if(txt) {
         SetWindowText(EditControl, txt);
-        free(txt);
+        str_free(txt);
     }
 }
 
@@ -714,7 +733,11 @@ static LPTSTR log_txt(void) {
     enter_critical_section(CRIT_WIN_LOG);
     for(curr=head; curr; curr=curr->next)
         len+=curr->len+2; /* +2 for trailing '\r\n' */
-    buff=malloc((len+1)*sizeof(TCHAR)); /* +1 for trailing '\0' */
+    buff=str_alloc((len+1)*sizeof(TCHAR)); /* +1 for trailing '\0' */
+    if(!buff) {
+        leave_critical_section(CRIT_WIN_LOG);
+        return NULL;
+    }
     for(curr=head; curr; curr=curr->next) {
         memcpy(buff+ptr, curr->txt, curr->len*sizeof(TCHAR));
         ptr+=curr->len;
@@ -730,15 +753,11 @@ static LPTSTR log_txt(void) {
 }
 
 static void set_visible(int i) {
-    LPTSTR txt;
-
     visible=i; /* setup global variable */
     CheckMenuItem(hpopup, IDM_LOG,
         visible?MF_CHECKED:MF_UNCHECKED); /* check or uncheck menu item */
     if(visible) {
-        txt=log_txt();
-        SetWindowText(EditControl, txt); /* setup window content */
-        free(txt);
+        update_logs();
         ShowWindow(hwnd, SW_SHOWNORMAL); /* show window */
         SetForegroundWindow(hwnd); /* bring on top */
     } else
@@ -759,17 +778,22 @@ void exit_win32(int exit_code) { /* used instead of exit() on Win32 */
 }
 
 static void error_box(const LPTSTR text) {
-    TCHAR to_print[STRLEN];
-    LPTSTR buff;
+    char *errmsg, *fullmsg;
+    LPTSTR tstr;
     long dw;
 
     dw=GetLastError();
     FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER|FORMAT_MESSAGE_FROM_SYSTEM,
         NULL, dw, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        (LPTSTR) &buff, 0, NULL);
-    _sntprintf(to_print, STRLEN, TEXT("%s: error %ld: %s"), text, dw, buff);
-    MessageBox(hwnd, to_print, win32_name, MB_ICONERROR);
-    LocalFree(buff);
+        (LPTSTR)&tstr, 0, NULL);
+    errmsg=tstr2str(tstr);
+    LocalFree(tstr);
+    fullmsg=str_printf("%s: error %ld: %s", text, dw, errmsg);
+    str_free(errmsg);
+    tstr=str2tstr(fullmsg);
+    str_free(fullmsg);
+    MessageBox(hwnd, tstr, win32_name, MB_ICONERROR);
+    str_free(tstr);
 }
 
 #ifndef _WIN32_WCE
@@ -789,18 +813,15 @@ static int service_initialize(void) {
 
 static int service_install(LPSTR command_line) {
     SC_HANDLE scm, service;
-    char exe_file_name[STRLEN], service_path[STRLEN];
+    char exe_file_name[MAX_PATH], *service_path;
 
     scm=OpenSCManager(0, 0, SC_MANAGER_CREATE_SERVICE);
     if(!scm) {
         error_box(TEXT("OpenSCManager"));
         return 1;
     }
-    GetModuleFileName(0, exe_file_name, STRLEN);
-    safecopy(service_path, "\"");
-    safeconcat(service_path, exe_file_name);
-    safeconcat(service_path, "\" -service ");
-    safeconcat(service_path, command_line);
+    GetModuleFileName(0, exe_file_name, MAX_PATH);
+    service_path=str_printf("\"%s\" -service %s", exe_file_name, command_line);
     service=CreateService(scm,
         global_options.win32_service,
         global_options.win32_service,
@@ -810,6 +831,7 @@ static int service_install(LPSTR command_line) {
         SERVICE_ERROR_NORMAL,
         service_path,
         NULL, NULL, NULL, NULL, NULL);
+    str_free(service_path);
     if(!service) {
         error_box(TEXT("CreateService"));
         CloseServiceHandle(scm);
