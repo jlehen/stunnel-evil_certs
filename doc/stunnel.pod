@@ -103,6 +103,18 @@ Each line of the configuration file can be either:
 
 =back
 
+An address parameter of an option may be either:
+
+=over 4
+
+=item * a port number
+
+=item * a colon-separated pair of IP address (either IPv4, IPv6, or domain name) and port number
+
+=item * a Unix socket path (Unix only)
+
+=back
+
 =head2 GLOBAL OPTIONS
 
 =over 4
@@ -295,11 +307,15 @@ below.
 
 =over 4
 
-=item B<accept> = [host:]port
+=item B<accept> = address
 
-accept connections on specified host:port
+accept connections on specified address
 
-If no host specified, defaults to all IP addresses for the local host.
+If no host specified, defaults to all IPv4 addresses for the local host.
+
+To listen on all IPv6 addresses use:
+
+    connect = :::port
 
 =item B<CApath> = directory
 
@@ -344,9 +360,9 @@ client mode (remote service uses SSL)
 
 default: no (server mode)
 
-=item B<connect> = [host:]port
+=item B<connect> = address
 
-connect to a remote host:port
+connect to a remote address
 
 If no host is specified, the host defaults to localhost.
 
@@ -522,17 +538,21 @@ Based on RFC 4642 - I<Using Transport Layer Security (TLS) with Network News Tra
 
 This protocol is only supported in client mode.
 
+=item I<pgsql>
+
+Based on http://www.postgresql.org/docs/8.3/static/protocol-flow.html#AEN73982
+
 =item I<pop3>
 
 Based on RFC 2449 - I<POP3 Extension Mechanism>
 
+=item I<proxy>
+
+Haproxy client IP address http://haproxy.1wt.eu/download/1.5/doc/proxy-protocol.txt
+
 =item I<smtp>
 
 Based on RFC 2487 - I<SMTP Service Extension for Secure SMTP over TLS>
-
-=item I<pgsql>
-
-Based on http://www.postgresql.org/docs/8.3/static/protocol-flow.html#AEN73982
 
 =back
 

@@ -73,7 +73,7 @@ void log_open(void) {
             s_log(LOG_ERR, "Unable to open output file: %s",
                 global_options.output_file);
     }
-    log_flush(LOG_MODE_FULL);
+    log_flush(LOG_MODE_CONFIGURED);
 }
 
 void log_close(void) {
@@ -87,9 +87,9 @@ void log_close(void) {
 void log_flush(LOG_MODE new_mode) {
     struct LIST *tmp;
 
-    /* prevent changing LOG_MODE_FULL to LOG_MODE_ERROR
+    /* prevent changing LOG_MODE_CONFIGURED to LOG_MODE_ERROR
      * once stderr file descriptor is closed */
-    if(mode==LOG_MODE_NONE)
+    if(mode!=LOG_MODE_CONFIGURED)
         mode=new_mode;
 
     while(head) {
@@ -113,6 +113,10 @@ void s_log(int level, const char *format, ...) {
     struct tm timestruct;
 #endif
 
+    /* performance optimization: skip the trivial case early */
+    if(mode==LOG_MODE_CONFIGURED && level>global_options.debug_level)
+        return;
+
     time(&gmt);
 #if defined(HAVE_LOCALTIME_R) && defined(_REENTRANT)
     timeptr=localtime_r(&gmt, &timestruct);
@@ -130,8 +134,6 @@ void s_log(int level, const char *format, ...) {
 
     if(mode==LOG_MODE_NONE) { /* save the text to log it later */
         tmp=str_alloc(sizeof(struct LIST));
-        if(!tmp) /* out of memory */
-            return;
         tmp->next=NULL;
         tmp->level=level;
         tmp->stamp=stamp;
@@ -155,29 +157,78 @@ static void log_raw(const int level, const char *stamp,
     char *line;
 
     /* build the line and log it to syslog/file */
-    if(mode==LOG_MODE_FULL) { /* configured */
+    if(mode==LOG_MODE_CONFIGURED) { /* configured */
         line=str_printf("%s %s: %s", stamp, id, text);
+        if(level<=global_options.debug_level) {
 #if !defined(USE_WIN32) && !defined(__vms)
-        if(level<=global_options.debug_level && global_options.option.syslog)
-            syslog(level, "%s: %s", id, text);
+            if(global_options.option.syslog)
+                syslog(level, "%s: %s", id, text);
 #endif /* USE_WIN32, __vms */
-        if(level<=global_options.debug_level && outfile)
-            file_putline(outfile, line); /* send log to file */
-    } else /* LOG_MODE_ERROR */
+            if(outfile)
+                file_putline(outfile, line); /* send log to file */
+        }
+    } else /* LOG_MODE_ERROR or LOG_MODE_INFO */
         line=str_dup(text); /* don't log the time stamp in error mode */
 
     /* log the line to GUI/stderr */
 #ifdef USE_WIN32
-    if(mode==LOG_MODE_ERROR || level<=global_options.debug_level)
+    if(mode==LOG_MODE_ERROR ||
+            (mode==LOG_MODE_INFO && level<LOG_DEBUG) ||
+            level<=global_options.debug_level)
         win_log(line); /* always log to the GUI window */
 #else /* Unix */
     if(mode==LOG_MODE_ERROR || /* always log LOG_MODE_ERROR to stderr */
+            (mode==LOG_MODE_INFO && level<LOG_DEBUG) ||
             (level<=global_options.debug_level &&
             global_options.option.foreground))
         fprintf(stderr, "%s\n", line); /* send log to stderr */
 #endif
 
     str_free(line);
+}
+
+/* memory allocation failed - it is not allowed to use any str.c functions */
+void fatal(char *error, char *file, int line) {
+    char text[80];
+#ifdef USE_WIN32
+    DWORD num;
+#endif /* USE_WIN32 */
+
+    snprintf(text, sizeof text, /* with newline */
+        "INTERNAL ERROR: %s at %s, line %d\n", error, file, line);
+
+    if(outfile) {
+#ifdef USE_WIN32
+        WriteFile(outfile->fh, text, strlen(text), &num, NULL);
+#else /* USE_WIN32 */
+        /* no file -> write to stderr */
+        write(outfile ? outfile->fd : 2, text, strlen(text));
+#endif /* USE_WIN32 */
+    }
+
+#ifndef USE_WIN32
+    if(mode!=LOG_MODE_CONFIGURED || global_options.option.foreground)
+        fputs(text, stderr);
+#endif /* !USE_WIN32 */
+
+    snprintf(text, sizeof text, /* without newline */
+        "INTERNAL ERROR: Out of memory at %s, line %d", file, line);
+
+#if !defined(USE_WIN32) && !defined(__vms)
+    if(global_options.option.syslog)
+        syslog(LOG_CRIT, "%s", text);
+#endif /* USE_WIN32, __vms */
+
+#ifdef USE_WIN32
+#ifdef _WIN32_WCE
+    MessageBox(NULL, TEXT("INTERNAL ERROR: Out of memory"),
+        TEXT("stunnel"), MB_ICONERROR);
+#else /* _WIN32_WCE */
+    MessageBox(NULL, text, "stunnel", MB_ICONERROR);
+#endif /* _WIN32_WCE */
+#endif /* USE_WIN32 */
+
+    abort();
 }
 
 void ioerror(const char *txt) { /* input/output error */

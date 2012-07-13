@@ -56,20 +56,24 @@ int num_processes=0;
 static int *ipc_socket, *busy;
 #endif /* USE_PTHREAD */
 
-void libwrap_init(int num) {
+void libwrap_init() {
 #ifdef USE_PTHREAD
     int i, j, rfd, result;
     char servname[SERVNAME_LEN];
+    static int initialized=0;
+    SERVICE_OPTIONS *opt;
 
-    num_processes=num;
-    if(!num_processes) /* no extra processes to spawn */
+    if(initialized) /* during startup or previous configuration file reload */
         return;
+    for(opt=service_options.next; opt; opt=opt->next)
+        if(opt->option.libwrap) /* libwrap is enabled for this service */
+            break;
+    if(!opt) /* disabled for all sections or inetd mode (no sections) */
+        return;
+
+    num_processes=LIBWRAP_CLIENTS;
     ipc_socket=str_alloc(2*num_processes*sizeof(int));
     busy=str_alloc(num_processes*sizeof(int));
-    if(!ipc_socket || !busy) {
-        s_log(LOG_ERR, "Memory allocation failed");
-        die(1);
-    }
     for(i=0; i<num_processes; ++i) { /* spawn a child */
         if(s_socketpair(AF_UNIX, SOCK_STREAM, 0, ipc_socket+2*i, 0, "libwrap_init"))
             die(1);
@@ -78,7 +82,7 @@ void libwrap_init(int num) {
             ioerror("fork");
             die(1);
         case  0:    /* child */
-            drop_privileges(); /* libwrap processes are not chrooted */
+            drop_privileges(0); /* libwrap processes are not chrooted */
             close(0); /* stdin */
             close(1); /* stdout */
             if(!global_options.option.foreground) /* for logging in read_fd */
@@ -97,10 +101,11 @@ void libwrap_init(int num) {
             close(ipc_socket[2*i+1]); /* child-side socket */
         }
     }
+    initialized=1;
 #endif /* USE_PTHREAD */
 }
 
-void libwrap_auth(CLI *c) {
+void libwrap_auth(CLI *c, char *accepted_address) {
     int result=0; /* deny by default */
 #ifdef USE_PTHREAD
     static volatile int num_busy=0, roundrobin=0;
@@ -111,6 +116,12 @@ void libwrap_auth(CLI *c) {
 
     if(!c->opt->option.libwrap) /* libwrap is disabled for this service */
         return; /* allow connection */
+#ifdef HAVE_STRUCT_SOCKADDR_UN
+    if(c->peer_addr.sa.sa_family==AF_UNIX) {
+        s_log(LOG_INFO, "Libwrap is not supported on Unix sockets");
+        return;
+    }
+#endif
 #ifdef USE_PTHREAD
     if(num_processes) {
         s_log(LOG_DEBUG, "Waiting for a libwrap process");
@@ -181,12 +192,12 @@ void libwrap_auth(CLI *c) {
     }
     if(!result) {
         s_log(LOG_WARNING, "Service %s REFUSED by libwrap from %s",
-            c->opt->servname, c->accepted_address);
+            c->opt->servname, accepted_address);
         s_log(LOG_DEBUG, "See hosts_access(5) manual for details");
         longjmp(c->err, 1);
     }
     s_log(LOG_DEBUG, "Service %s permitted by libwrap from %s",
-        c->opt->servname, c->accepted_address);
+        c->opt->servname, accepted_address);
 }
 
 static int check(char *name, int fd) {

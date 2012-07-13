@@ -57,7 +57,9 @@ static int init_ecdh(SERVICE_OPTIONS *);
 
 /* loading certificate */
 static int load_certificate(SERVICE_OPTIONS *);
+#if defined(USE_WIN32) || OPENSSL_VERSION_NUMBER>=0x0090700fL
 static int password_cb(char *, int, int, void *);
+#endif
 
 /* session cache callbacks */
 static int sess_new_cb(SSL *, SSL_SESSION *);
@@ -69,8 +71,11 @@ static void cache_transfer(SSL_CTX *, const unsigned int, const unsigned,
     unsigned char **, unsigned int *);
 
 /* info callbacks */
-static void info_callback(const SSL *, int, int);
-static void print_stats(SSL_CTX *);
+static void info_callback(
+#if OPENSSL_VERSION_NUMBER>=0x0090700fL
+    const
+#endif
+    SSL *, int, int);
 
 static void sslerror_queue(void);
 static void sslerror_log(unsigned long, char *);
@@ -118,7 +123,8 @@ int context_init(SERVICE_OPTIONS *section) { /* init SSL context */
     }
 
     /* set info callback */
-    SSL_CTX_set_info_callback(section->ctx, info_callback);
+    if(global_options.debug_level==LOG_DEBUG) /* performance optimization */
+        SSL_CTX_set_info_callback(section->ctx, info_callback);
 
     /* ciphers, options, mode */
     if(section->cipher_list)
@@ -128,8 +134,16 @@ int context_init(SERVICE_OPTIONS *section) { /* init SSL context */
         }
     s_log(LOG_DEBUG, "SSL options set: 0x%08lX",
         SSL_CTX_set_options(section->ctx, section->ssl_options));
+#ifdef SSL_MODE_RELEASE_BUFFERS
     SSL_CTX_set_mode(section->ctx,
-        SSL_MODE_ENABLE_PARTIAL_WRITE|SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+        SSL_MODE_ENABLE_PARTIAL_WRITE |
+        SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER |
+        SSL_MODE_RELEASE_BUFFERS);
+#else
+    SSL_CTX_set_mode(section->ctx,
+        SSL_MODE_ENABLE_PARTIAL_WRITE |
+        SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+#endif
     s_log(LOG_INFO, "SSL context initialized");
     return 0; /* OK */
 }
@@ -143,6 +157,9 @@ static int servername_cb(SSL *ssl, int *ad, void *arg) {
     const char *servername=SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
     SERVERNAME_LIST *list;
     CLI *c;
+#ifdef USE_LIBWRAP
+    char *accepted_address;
+#endif /* USE_LIBWRAP */
 
     /* leave the alert type at SSL_AD_UNRECOGNIZED_NAME */
     (void)ad; /* skip warning about unused parameter */
@@ -156,10 +173,14 @@ static int servername_cb(SSL *ssl, int *ad, void *arg) {
             c=SSL_get_ex_data(ssl, cli_index);
             c->opt=list->opt;
             SSL_set_SSL_CTX(ssl, c->opt->ctx);
+            SSL_set_verify(ssl, SSL_CTX_get_verify_mode(c->opt->ctx),
+                SSL_CTX_get_verify_callback(c->opt->ctx));
             s_log(LOG_NOTICE, "SNI: switched to section %s",
                 c->opt->servname);
 #ifdef USE_LIBWRAP
-            libwrap_auth(c); /* retry on a service switch */
+            accepted_address=s_ntop(&c->peer_addr, c->peer_addr_len);
+            libwrap_auth(c, accepted_address); /* retry on a service switch */
+            str_free(accepted_address);
 #endif /* USE_LIBWRAP */
             return SSL_TLSEXT_ERR_OK;
         }
@@ -326,7 +347,9 @@ static int load_certificate(SERVICE_OPTIONS *section) {
     s_log(LOG_DEBUG, "Certificate loaded");
 
     s_log(LOG_DEBUG, "Key file: %s", section->key);
+#if defined(USE_WIN32) || OPENSSL_VERSION_NUMBER>=0x0090700fL
     SSL_CTX_set_default_passwd_cb(section->ctx, password_cb);
+#endif
 #ifdef HAVE_OSSL_ENGINE_H
 #ifdef USE_WIN32
     ui_method=UI_create_method("stunnel WIN32 UI");
@@ -380,6 +403,7 @@ static int load_certificate(SERVICE_OPTIONS *section) {
     return 0; /* OK */
 }
 
+#if defined(USE_WIN32) || OPENSSL_VERSION_NUMBER>=0x0090700fL
 static int password_cb(char *buf, int size, int rwflag, void *userdata) {
     static char cache[PEM_BUFSIZE];
     int len;
@@ -391,6 +415,7 @@ static int password_cb(char *buf, int size, int rwflag, void *userdata) {
 #ifdef USE_WIN32
         len=passwd_cb(buf, size, rwflag, userdata);
 #else
+        /* PEM_def_callback is defined in OpenSSL 0.9.7 and later */
         len=PEM_def_callback(buf, size, rwflag, NULL);
 #endif
         memcpy(cache, buf, size); /* save in cache */
@@ -402,6 +427,7 @@ static int password_cb(char *buf, int size, int rwflag, void *userdata) {
     }
     return len;
 }
+#endif
 
 /**************************************** session cache callbacks */
 
@@ -439,7 +465,11 @@ static SSL_SESSION *sess_get_cb(SSL *ssl,
     if(!val)
         return NULL;
     val_tmp=val;
-    sess=d2i_SSL_SESSION(NULL, (const unsigned char **)&val_tmp, val_len);
+    sess=d2i_SSL_SESSION(NULL,
+#if OPENSSL_VERSION_NUMBER>=0x0090800fL
+        (const unsigned char **)
+#endif /* OpenSSL version >= 0.8.0 */
+        &val_tmp, val_len);
     str_free(val);
     return sess;
 }
@@ -467,7 +497,6 @@ static void cache_transfer(SSL_CTX *ctx, const unsigned int type,
     const char *type_description[]={"new", "get", "remove"};
     unsigned int i;
     int s, len;
-    SOCKADDR_UNION addr;
     struct timeval t;
     CACHE_PACKET *packet;
     SERVICE_OPTIONS *section;
@@ -518,9 +547,8 @@ static void cache_transfer(SSL_CTX *ctx, const unsigned int type,
 
     /* retrieve pointer to the section structure of this ctx */
     section=SSL_CTX_get_ex_data(ctx, opt_index);
-    memcpy(&addr, &section->sessiond_addr.addr[0], sizeof addr);
     if(sendto(s, (void *)packet, sizeof(CACHE_PACKET)-MAX_VAL_LEN+val_len, 0,
-            &addr.sa, addr_len(addr))<0) {
+            &section->sessiond_addr.sa, addr_len(&section->sessiond_addr))<0) {
         sockerror("cache_transfer: sendto");
         closesocket(s);
         str_free(packet);
@@ -547,7 +575,8 @@ static void cache_transfer(SSL_CTX *ctx, const unsigned int type,
     len=recv(s, (void *)packet, sizeof(CACHE_PACKET), 0);
     closesocket(s);
     if(len<0) {
-        if(get_last_socket_error()==EAGAIN)
+        if(get_last_socket_error()==S_EWOULDBLOCK ||
+                get_last_socket_error()==S_EAGAIN)
             s_log(LOG_INFO, "cache_transfer: recv timeout");
         else
             sockerror("cache_transfer: recv");
@@ -582,44 +611,45 @@ static void cache_transfer(SSL_CTX *ctx, const unsigned int type,
 
 /**************************************** informational callback */
 
-static void info_callback(const SSL *ssl, int where, int ret) {
-    if(where & SSL_CB_LOOP)
+static void info_callback(
+#if OPENSSL_VERSION_NUMBER>=0x0090700fL
+        const
+#endif
+        SSL *ssl, int where, int ret) {
+    if(where & SSL_CB_LOOP) {
         s_log(LOG_DEBUG, "SSL state (%s): %s",
-        where & SSL_ST_CONNECT ? "connect" :
-        where & SSL_ST_ACCEPT ? "accept" :
-        "undefined", SSL_state_string_long(ssl));
-    else if(where & SSL_CB_ALERT)
+            where & SSL_ST_CONNECT ? "connect" :
+            where & SSL_ST_ACCEPT ? "accept" :
+            "undefined", SSL_state_string_long(ssl));
+    } else if(where & SSL_CB_ALERT) {
         s_log(LOG_DEBUG, "SSL alert (%s): %s: %s",
             where & SSL_CB_READ ? "read" : "write",
             SSL_alert_type_string_long(ret),
             SSL_alert_desc_string_long(ret));
-    else if(where==SSL_CB_HANDSHAKE_DONE)
-        print_stats(ssl->ctx);
-}
-
-static void print_stats(SSL_CTX *ctx) { /* print statistics */
-    s_log(LOG_DEBUG, "%4ld items in the session cache",
-        SSL_CTX_sess_number(ctx));
-    s_log(LOG_DEBUG, "%4ld client connects (SSL_connect())",
-        SSL_CTX_sess_connect(ctx));
-    s_log(LOG_DEBUG, "%4ld client connects that finished",
-        SSL_CTX_sess_connect_good(ctx));
-    s_log(LOG_DEBUG, "%4ld client renegotiations requested",
-        SSL_CTX_sess_connect_renegotiate(ctx));
-    s_log(LOG_DEBUG, "%4ld server connects (SSL_accept())",
-        SSL_CTX_sess_accept(ctx));
-    s_log(LOG_DEBUG, "%4ld server connects that finished",
-        SSL_CTX_sess_accept_good(ctx));
-    s_log(LOG_DEBUG, "%4ld server renegotiations requested",
-        SSL_CTX_sess_accept_renegotiate(ctx));
-    s_log(LOG_DEBUG, "%4ld session cache hits",
-        SSL_CTX_sess_hits(ctx));
-    s_log(LOG_DEBUG, "%4ld external session cache hits",
-        SSL_CTX_sess_cb_hits(ctx));
-    s_log(LOG_DEBUG, "%4ld session cache misses",
-        SSL_CTX_sess_misses(ctx));
-    s_log(LOG_DEBUG, "%4ld session cache timeouts",
-        SSL_CTX_sess_timeouts(ctx));
+    } else if(where==SSL_CB_HANDSHAKE_DONE) {
+        s_log(LOG_DEBUG, "%4ld items in the session cache",
+            SSL_CTX_sess_number(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld client connects (SSL_connect())",
+            SSL_CTX_sess_connect(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld client connects that finished",
+            SSL_CTX_sess_connect_good(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld client renegotiations requested",
+            SSL_CTX_sess_connect_renegotiate(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld server connects (SSL_accept())",
+            SSL_CTX_sess_accept(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld server connects that finished",
+            SSL_CTX_sess_accept_good(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld server renegotiations requested",
+            SSL_CTX_sess_accept_renegotiate(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld session cache hits",
+            SSL_CTX_sess_hits(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld external session cache hits",
+            SSL_CTX_sess_cb_hits(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld session cache misses",
+            SSL_CTX_sess_misses(ssl->ctx));
+        s_log(LOG_DEBUG, "%4ld session cache timeouts",
+            SSL_CTX_sess_timeouts(ssl->ctx));
+    }
 }
 
 /**************************************** SSL error reporting */

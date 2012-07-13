@@ -192,6 +192,7 @@ unsigned long stunnel_thread_id(void) {
 }
 
 static void null_handler(int sig) {
+    (void)sig; /* skip warning about unused parameter */
     signal(SIGCHLD, null_handler);
 }
 
@@ -233,11 +234,7 @@ void leave_critical_section(SECTION_CODE i) {
     pthread_mutex_unlock(stunnel_cs+i);
 }
 
-static void locking_callback(int mode, int type,
-#ifdef HAVE_OPENSSL
-    const /* callback definition has been changed in openssl 0.9.3 */
-#endif
-    char *file, int line) {
+static void locking_callback(int mode, int type, const char *file, int line) {
     (void)file; /* skip warning about unused parameter */
     (void)line; /* skip warning about unused parameter */
     if(mode&CRYPTO_LOCK)
@@ -364,11 +361,7 @@ void leave_critical_section(SECTION_CODE i) {
     LeaveCriticalSection(stunnel_cs+i);
 }
 
-static void locking_callback(int mode, int type,
-#ifdef HAVE_OPENSSL
-    const /* callback definition has been changed in openssl 0.9.3 */
-#endif
-    char *file, int line) {
+static void locking_callback(int mode, int type, const char *file, int line) {
     (void)file; /* skip warning about unused parameter */
     (void)line; /* skip warning about unused parameter */
     if(mode&CRYPTO_LOCK)

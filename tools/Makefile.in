@@ -46,6 +46,7 @@ am__aclocal_m4_deps = $(top_srcdir)/m4/libtool.m4 \
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 mkinstalldirs = $(install_sh) -d
+CONFIG_HEADER = $(top_builddir)/src/config.h
 CONFIG_CLEAN_FILES = stunnel.conf-sample stunnel.init stunnel.service
 CONFIG_CLEAN_VPATH_FILES =
 SOURCES =
@@ -134,6 +135,7 @@ RANLIB = @RANLIB@
 SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
+SSLDIR = @SSLDIR@
 STRIP = @STRIP@
 VERSION = @VERSION@
 abs_builddir = @abs_builddir@
@@ -183,7 +185,9 @@ psdir = @psdir@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
 srcdir = @srcdir@
-ssldir = @ssldir@
+stunnel_CFLAGS = @stunnel_CFLAGS@
+stunnel_LDFLAGS = @stunnel_LDFLAGS@
+stunnel_LDLAGS = @stunnel_LDLAGS@
 sysconfdir = @sysconfdir@
 target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
@@ -198,7 +202,7 @@ examplesdir = $(docdir)/examples
 examples_DATA = ca.html ca.pl importCA.html importCA.sh script.sh \
 	stunnel.spec stunnel.init stunnel.service
 
-openssl = $(ssldir)/bin/openssl
+OPENSSL = $(SSLDIR)/bin/openssl
 all: all-am
 
 .SUFFIXES:
@@ -444,11 +448,11 @@ install-data-local:
 		else \
 			RND=""; \
 		fi; \
-		$(openssl) req -new -x509 -days 365 $$RND \
+		$(OPENSSL) req -new -x509 -days 365 $$RND \
 			-config $(srcdir)/stunnel.cnf \
 			-out stunnel.pem -keyout stunnel.pem; \
-		$(openssl) gendh $$RND 1024 >> stunnel.pem; \
-		$(openssl) x509 -subject -dates -fingerprint -noout -in stunnel.pem; \
+		$(OPENSSL) gendh $$RND 1024 >> stunnel.pem; \
+		$(OPENSSL) x509 -subject -dates -fingerprint -noout -in stunnel.pem; \
 		${INSTALL} -m 600 stunnel.pem $(DESTDIR)$(confdir)/stunnel.pem; \
 		rm stunnel.pem; \
 	fi
