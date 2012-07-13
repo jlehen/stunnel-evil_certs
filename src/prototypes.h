@@ -110,6 +110,8 @@ typedef struct {
 
 extern GLOBAL_OPTIONS global_options;
 
+typedef struct servername_list_struct SERVERNAME_LIST; /* forward declaration */
+
 typedef struct service_options_struct {
     SSL_CTX *ctx;                                            /*  SSL context */
     X509_STORE *revocation_store;             /* cert store for CRL checking */
@@ -142,6 +144,7 @@ typedef struct service_options_struct {
     unsigned long ocsp_flags;
     SSL_METHOD *client_method, *server_method;
     SOCKADDR_LIST sessiond_addr;
+    SERVERNAME_LIST *servername_list_head, *servername_list_tail;
 
         /* service-specific data for client.c */
     int fd;        /* file descriptor accepting connections for this service */
@@ -170,26 +173,33 @@ typedef struct service_options_struct {
 
         /* on/off switches */
     struct {
+        unsigned int accept:1;          /* endpoint: accept */
         unsigned int client:1;
         unsigned int delayed_lookup:1;
-        unsigned int accept:1;
-        unsigned int remote:1;
-        unsigned int retry:1; /* loop remote+program */
-        unsigned int sessiond:1;
-        unsigned int program:1;
-#ifndef USE_WIN32
-        unsigned int pty:1;
-        unsigned int transparent_src:1;
-        unsigned int transparent_dst:1;
-#endif
-        unsigned int ocsp:1;
 #ifdef USE_LIBWRAP
         unsigned int libwrap:1;
 #endif
+        unsigned int remote:1;          /* endpoint: connect */
+        unsigned int retry:1;           /* loop remote+program */
+        unsigned int sessiond:1;
+        unsigned int program:1;         /* endpoint: exec */
+        unsigned int sni:1;             /* endpoint: sni */
+#ifndef USE_WIN32
+        unsigned int pty:1;
+        unsigned int transparent_src:1;
+        unsigned int transparent_dst:1; /* endpoint: transparent destination */
+#endif
+        unsigned int ocsp:1;
     } option;
 } SERVICE_OPTIONS;
 
 extern SERVICE_OPTIONS service_options;
+
+struct servername_list_struct {
+    char *servername;
+    SERVICE_OPTIONS *opt;
+    struct servername_list_struct *next;
+};
 
 typedef enum {
     TYPE_NONE, TYPE_FLAG, TYPE_INT, TYPE_LINGER, TYPE_TIMEVAL, TYPE_STRING
@@ -245,7 +255,8 @@ typedef struct disk_file {
 extern volatile int num_clients;
 
 void main_initialize(char *, char *);
-void main_execute(void);
+void daemon_loop(void);
+void unbind_ports(void);
 int bind_ports(void);
 #if !defined (USE_WIN32) && !defined (__vms) && !defined(USE_OS2)
 void drop_privileges(void);
@@ -298,7 +309,7 @@ ENGINE *get_engine(int);
 /**************************************** prototypes for options.c */
 
 void parse_commandline(char *, char *);
-void parse_conf(char *, CONF_TYPE);
+int parse_conf(char *, CONF_TYPE);
 
 /**************************************** prototypes for ctx.c */
 
@@ -317,13 +328,26 @@ int s_poll_canread(s_poll_set *, int);
 int s_poll_canwrite(s_poll_set *, int);
 int s_poll_error(s_poll_set *, int);
 int s_poll_wait(s_poll_set *, int, int);
-#if !defined(USE_WIN32) && !defined(USE_OS2)
+
+#ifdef USE_WIN32
+#define SIGNAL_RELOAD_CONFIG    1
+#define SIGNAL_REOPEN_LOG       2
+#define SIGNAL_TERMINATE        3
+#else
+#define SIGNAL_RELOAD_CONFIG    SIGHUP
+#define SIGNAL_REOPEN_LOG       SIGUSR1
+#define SIGNAL_TERMINATE        SIGTERM
+#endif
 void signal_handler(int);
 int signal_pipe_init(void);
+void signal_post(int);
+#if !defined(USE_WIN32) && !defined(USE_OS2)
 void child_status(void);  /* dead libwrap or 'exec' process detected */
 #endif
+
 int set_socket_options(int, int);
 int get_socket_error(const int);
+int make_sockets(int [2]);
 
 /**************************************** prototypes for client.c */
 
@@ -426,13 +450,14 @@ void stack_info(int);
 /**************************************** prototypes for gui.c */
 
 typedef struct {
-    SERVICE_OPTIONS *section;
+    SERVICE_OPTIONS *opt;
     char pass[PEM_BUFSIZE];
 } UI_DATA;
 
 #ifdef USE_WIN32
 void win_log(char *);
-void exit_win32(int);
+void win_exit(int);
+void win_newconfig(int);
 int passwd_cb(char *, int, int, void *);
 #ifdef HAVE_OSSL_ENGINE_H
 int pin_cb(UI *, UI_STRING *);
