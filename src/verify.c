@@ -157,6 +157,7 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *callback_ctx) {
         /* our verify callback function */
     SSL *ssl;
     CLI *c;
+    char *subject_name;
     char subject_name[STRLEN];
     int evil_cert_ok;
 
@@ -167,37 +168,41 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *callback_ctx) {
     evil_cert_ok = c->opt->option.evilremote | c->opt->option.evilprogram;
 
     /* certificate name for logging */
-    X509_NAME_oneline(X509_get_subject_name(callback_ctx->current_cert),
-        subject_name, STRLEN);
-    safestring(subject_name);
+    subject_name=X509_NAME_oneline(
+        X509_get_subject_name(callback_ctx->current_cert), NULL, 0);
 
     s_log(LOG_DEBUG, "Starting certificate verification: depth=%d, %s",
         callback_ctx->error_depth, subject_name);
     if(!cert_check(c, callback_ctx, preverify_ok)) {
         s_log(LOG_WARNING, "Certificate check failed: depth=%d, %s",
             callback_ctx->error_depth, subject_name);
+        OPENSSL_free(subject_name);
         return evil_cert_ok; /* reject connection */
     }
     if(!crl_check(c, callback_ctx)) {
         s_log(LOG_WARNING, "CRL check failed: depth=%d, %s",
             callback_ctx->error_depth, subject_name);
+        OPENSSL_free(subject_name);
         return evil_cert_ok; /* reject connection */
     }
     if(c->opt->option.ocsp && !ocsp_check(c, callback_ctx)) {
         s_log(LOG_WARNING, "OCSP check failed: depth=%d, %s",
             callback_ctx->error_depth, subject_name);
+        OPENSSL_free(subject_name);
         return evil_cert_ok; /* reject connection */
     }
     /* errnum=X509_STORE_CTX_get_error(ctx); */
     s_log(LOG_NOTICE, "Certificate accepted: depth=%d, %s",
         callback_ctx->error_depth, subject_name);
+    OPENSSL_free(subject_name);
     return 1; /* accept connection */
 }
 
 /**************************************** certificate checking */
 
 static int cert_check(CLI *c, X509_STORE_CTX *callback_ctx, int preverify_ok) {
-    X509_OBJECT ret;
+    X509_OBJECT obj;
+    ASN1_BIT_STRING *local_key, *peer_key;
 
     if(c->opt->verify_level==SSL_VERIFY_NONE) {
         s_log(LOG_INFO, "CERT: Verification not enabled");
@@ -209,11 +214,19 @@ static int cert_check(CLI *c, X509_STORE_CTX *callback_ctx, int preverify_ok) {
             X509_verify_cert_error_string(callback_ctx->error));
         return 0; /* reject connection */
     }
-    if(c->opt->verify_use_only_my && callback_ctx->error_depth==0 &&
-            X509_STORE_get_by_subject(callback_ctx, X509_LU_X509,
-                X509_get_subject_name(callback_ctx->current_cert), &ret)!=1) {
-        s_log(LOG_WARNING, "CERT: Certificate not found in local repository");
-        return 0; /* reject connection */
+    if(c->opt->verify_use_only_my && callback_ctx->error_depth==0) {
+        if(X509_STORE_get_by_subject(callback_ctx, X509_LU_X509,
+                X509_get_subject_name(callback_ctx->current_cert), &obj)!=1) {
+            s_log(LOG_WARNING, "CERT: Certificate not found in local repository");
+            return 0; /* reject connection */
+        }
+        peer_key=X509_get0_pubkey_bitstr(callback_ctx->current_cert);
+        local_key=X509_get0_pubkey_bitstr(obj.data.x509);
+        if(!peer_key || !local_key || peer_key->length!=local_key->length ||
+                memcmp(peer_key->data, local_key->data, local_key->length)) {
+            s_log(LOG_WARNING, "CERT: Public keys do not match");
+            return 0; /* reject connection */
+        }
     }
     return 1; /* accept connection */
 }
@@ -447,14 +460,25 @@ static void log_time(const int level, const char *txt, ASN1_TIME *t) {
     if(!t)
         return;
     bio=BIO_new(BIO_s_mem());
+    if(!bio)
+        return;
     ASN1_TIME_print(bio, t);
     n=BIO_pending(bio);
-    cp=malloc(n+1);
+    cp=str_alloc(n+1);
+    if(!cp) {
+        BIO_free(bio);
+        return;
+    }
     n=BIO_read(bio, cp, n);
+    if(n<0) {
+        BIO_free(bio);
+        str_free(cp);
+        return;
+    }
     cp[n]='\0';
     BIO_free(bio);
     s_log(level, "%s: %s", txt, cp);
-    free(cp);
+    str_free(cp);
 }
 
 /* end of verify.c */

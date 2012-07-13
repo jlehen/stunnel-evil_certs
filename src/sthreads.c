@@ -47,10 +47,12 @@
 /* no need for critical sections */
 
 void enter_critical_section(SECTION_CODE i) {
+    (void)i; /* skip warning about unused parameter */
     /* empty */
 }
 
 void leave_critical_section(SECTION_CODE i) {
+    (void)i; /* skip warning about unused parameter */
     /* empty */
 }
 
@@ -76,7 +78,6 @@ void leave_critical_section(SECTION_CODE i) {
 /* first context on the ready list is the active context */
 CONTEXT *ready_head=NULL, *ready_tail=NULL;         /* ready to execute */
 CONTEXT *waiting_head=NULL, *waiting_tail=NULL;     /* waiting on poll() */
-int next_id=1;
 
 unsigned long stunnel_process_id(void) {
     return (unsigned long)getpid();
@@ -86,63 +87,48 @@ unsigned long stunnel_thread_id(void) {
     return ready_head ? ready_head->id : 0;
 }
 
-static CONTEXT *new_context(int stack_size) {
+static CONTEXT *new_context(void) {
+    static int next_id=1;
     CONTEXT *context;
 
     /* allocate and fill the CONTEXT structure */
-    context=malloc(sizeof(CONTEXT));
+    context=calloc(1, sizeof(CONTEXT));
     if(!context) {
         s_log(LOG_ERR, "Unable to allocate CONTEXT structure");
-        return NULL;
-    }
-    context->stack=malloc(stack_size);
-    if(!context->stack) {
-        s_log(LOG_ERR, "Unable to allocate CONTEXT stack");
         return NULL;
     }
     context->id=next_id++;
     context->fds=NULL;
     context->ready=0;
-    /* some manuals claim that initialization of context structure is required */
-    if(getcontext(&context->context)<0) {
-        free(context->stack);
-        free(context);
-        ioerror("getcontext");
-        return NULL;
-    }
-    context->context.uc_link=NULL; /* it should never happen */
-#if defined(__sgi) || ARGC==2 /* obsolete ss_sp semantics */
-    context->context.uc_stack.ss_sp=context->stack+stack_size-8;
-#else
-    context->context.uc_stack.ss_sp=context->stack;
-#endif
-    context->context.uc_stack.ss_size=stack_size;
-    context->context.uc_stack.ss_flags=0;
 
-    /* attach to the tail of the ready queue */
+    /* append to the tail of the ready queue */
     context->next=NULL;
     if(ready_tail)
         ready_tail->next=context;
     ready_tail=context;
     if(!ready_head)
         ready_head=context;
+
     return context;
 }
 
 void sthreads_init(void) {
     /* create the first (listening) context and put it in the running queue */
-    if(!new_context(DEFAULT_STACK_SIZE)) {
+    if(!new_context()) {
         s_log(LOG_ERR, "Unable create the listening context");
         die(1);
     }
+    /* no need to initialize ucontext_t structure here
+       it will be initialied with swapcontext() call */
 }
 
 int create_client(int ls, int s, CLI *arg, void *(*cli)(void *)) {
     CONTEXT *context;
 
     (void)ls; /* this parameter is only used with USE_FORK */
+    
     s_log(LOG_DEBUG, "Creating a new context");
-    context=new_context(arg->opt->stack_size);
+    context=new_context();
     if(!context) {
         if(arg)
             free(arg);
@@ -150,6 +136,38 @@ int create_client(int ls, int s, CLI *arg, void *(*cli)(void *)) {
             closesocket(s);
         return -1;
     }
+
+    /* initialize context_t structure */
+    if(getcontext(&context->context)<0) {
+        free(context);
+        if(arg)
+            free(arg);
+        if(s>=0)
+            closesocket(s);
+        ioerror("getcontext");
+        return -1;
+    }
+    context->context.uc_link=NULL; /* stunnel does not use uc_link */
+
+    /* create stack */
+    context->stack=calloc(1, arg->opt->stack_size);
+    if(!context->stack) {
+        free(context);
+        if(arg)
+            free(arg);
+        if(s>=0)
+            closesocket(s);
+        s_log(LOG_ERR, "Unable to allocate stack");
+        return -1;
+    }
+#if defined(__sgi) || ARGC==2 /* obsolete ss_sp semantics */
+    context->context.uc_stack.ss_sp=context->stack+arg->opt->stack_size-8;
+#else
+    context->context.uc_stack.ss_sp=context->stack;
+#endif
+    context->context.uc_stack.ss_size=arg->opt->stack_size;
+    context->context.uc_stack.ss_flags=0;
+
     s_log(LOG_DEBUG, "Context %ld created", context->id);
     makecontext(&context->context, (void(*)(void))cli, ARGC, arg);
     return 0;
@@ -236,6 +254,7 @@ static struct CRYPTO_dynlock_value *dyn_create_function(const char *file,
 
     (void)file; /* skip warning about unused parameter */
     (void)line; /* skip warning about unused parameter */
+    /* there is no guarantee free() is called from the same thread */
     value=malloc(sizeof(struct CRYPTO_dynlock_value));
     if(!value)
         return NULL;
@@ -258,6 +277,7 @@ static void dyn_destroy_function(struct CRYPTO_dynlock_value *value,
     (void)file; /* skip warning about unused parameter */
     (void)line; /* skip warning about unused parameter */
     pthread_mutex_destroy(&value->mutex);
+    /* there is no guarantee malloc() is called from the same thread */
     free(value);
 }
 
@@ -289,40 +309,42 @@ void sthreads_init(void) {
 }
 
 int create_client(int ls, int s, CLI *arg, void *(*cli)(void *)) {
-    pthread_attr_t pth_attr;
     pthread_t thread;
-#ifdef HAVE_PTHREAD_SIGMASK
-    sigset_t newmask, oldmask;
+    pthread_attr_t pth_attr;
+    int error;
+#if defined(HAVE_PTHREAD_SIGMASK) && !defined(__APPLE__)
+    /* Disabled on OS X due to strange problems on Mac OS X 10.5
+       it seems to restore signal mask somewhere (I couldn't find where)
+       effectively blocking signals after first accepted connection */
+    sigset_t new_set, old_set;
+#endif /* HAVE_PTHREAD_SIGMASK && !__APPLE__*/
 
     (void)ls; /* this parameter is only used with USE_FORK */
-    /* initialize attributes for creating new threads */
+
+#if defined(HAVE_PTHREAD_SIGMASK) && !defined(__APPLE__)
+    /* the idea is that only the main thread handles all the signals with
+     * posix threads;  signals are blocked for any other thread */
+    sigfillset(&new_set);
+    pthread_sigmask(SIG_SETMASK, &new_set, &old_set); /* block signals */
+#endif /* HAVE_PTHREAD_SIGMASK && !__APPLE__*/
     pthread_attr_init(&pth_attr);
     pthread_attr_setdetachstate(&pth_attr, PTHREAD_CREATE_DETACHED);
     pthread_attr_setstacksize(&pth_attr, arg->opt->stack_size);
+    error=pthread_create(&thread, &pth_attr, cli, arg);
+    pthread_attr_destroy(&pth_attr);
+#if defined(HAVE_PTHREAD_SIGMASK) && !defined(__APPLE__)
+    pthread_sigmask(SIG_SETMASK, &old_set, NULL); /* unblock signals */
+#endif /* HAVE_PTHREAD_SIGMASK && !__APPLE__*/
 
-    /* the idea is that only the main thread handles all the signals with
-     * posix threads;  signals are blocked for any other thread */
-    sigemptyset(&newmask);
-    sigaddset(&newmask, SIGCHLD);
-    sigaddset(&newmask, SIGTERM);
-    sigaddset(&newmask, SIGQUIT);
-    sigaddset(&newmask, SIGINT);
-    sigaddset(&newmask, SIGHUP);
-    pthread_sigmask(SIG_BLOCK, &newmask, &oldmask); /* block signals */
-#endif /* HAVE_PTHREAD_SIGMASK */
-    if(pthread_create(&thread, &pth_attr, cli, arg)) {
-#ifdef HAVE_PTHREAD_SIGMASK
-        pthread_sigmask(SIG_SETMASK, &oldmask, NULL); /* restore the mask */
-#endif /* HAVE_PTHREAD_SIGMASK */
+    if(error) {
+        errno=error;
+        ioerror("pthread_create");
         if(arg)
             free(arg);
         if(s>=0)
             closesocket(s);
         return -1;
     }
-#ifdef HAVE_PTHREAD_SIGMASK
-    pthread_sigmask(SIG_SETMASK, &oldmask, NULL); /* restore the mask */
-#endif /* HAVE_PTHREAD_SIGMASK */
     return 0;
 }
 
@@ -364,6 +386,7 @@ static struct CRYPTO_dynlock_value *dyn_create_function(const char *file,
 
     (void)file; /* skip warning about unused parameter */
     (void)line; /* skip warning about unused parameter */
+    /* there is no guarantee free() is called from the same thread */
     value=malloc(sizeof(struct CRYPTO_dynlock_value));
     if(!value)
         return NULL;
@@ -386,6 +409,7 @@ static void dyn_destroy_function(struct CRYPTO_dynlock_value *value,
     (void)file; /* skip warning about unused parameter */
     (void)line; /* skip warning about unused parameter */
     DeleteCriticalSection(&value->mutex);
+    /* there is no guarantee malloc() is called from the same thread */
     free(value);
 }
 

@@ -22,7 +22,7 @@
  
 # Modify this to point to your actual openssl compile directory
 # (You did already compile openssl, didn't you???)
-#SSLDIR=../openssl-1.0.0c
+#SSLDIR=../openssl-1.0.0d
 SSLDIR=C:/Users/standard/Documents/Dvts/Contrib/openssl/v1.0.0c/patched3
 
 # c:\, antislash is not correctly recognized by mingw32-make, produces some "missing separator" issue.
@@ -54,11 +54,11 @@ OBJ=$(OBJROOT)/$(TARGETCPU)
 BINROOT=../bin
 BIN=$(BINROOT)/$(TARGETCPU)
 
-#OBJS=stunnel.o ssl.o ctx.o verify.o file.o client.o protocol.o sthreads.o log.o options.o network.o resolver.o gui.o resources.o version.o
+#OBJS=stunnel.o ssl.o ctx.o verify.o file.o client.o protocol.o sthreads.o log.o options.o network.o resolver.o gui.o resources.o version.o str.c
 
 OBJS=$(OBJ)/stunnel.o $(OBJ)/ssl.o $(OBJ)/ctx.o $(OBJ)/verify.o $(OBJ)/file.o $(OBJ)/client.o   \
 	$(OBJ)/protocol.o $(OBJ)/sthreads.o $(OBJ)/log.o $(OBJ)/options.o $(OBJ)/network.o \
-	$(OBJ)/resolver.o $(OBJ)/gui.o $(OBJ)/resources.o \
+	$(OBJ)/resolver.o $(OBJ)/gui.o $(OBJ)/resources.o $(OBJ)\str.obj \
 	$(OBJ)/version.o
 
 CC=gcc
